@@ -7,6 +7,11 @@ dither/tune
 *.pbm
 *.pgm
 
-# ...except the captured reference frames, which the tone curve was tuned
-# against. Without them that tuning cannot be re-derived or revisited.
-!frames/*.pgm
+# Photographs never go in this repo. The reference captures in frames/ are of
+# a real home and a real face, and they are only needed locally for tuning the
+# tone curve with dither/tune. Keep them on disk, out of git.
+frames/
+*.png
+*.jpg
+*.jpeg
+*.rtf
