@@ -1,7 +1,12 @@
 .DS_Store
 build/
 
-# native dither harness
+# native harness binaries and their scratch output
 dither/test_dither
+dither/tune
 *.pbm
 *.pgm
+
+# ...except the captured reference frames, which the tone curve was tuned
+# against. Without them that tuning cannot be re-derived or revisited.
+!frames/*.pgm
