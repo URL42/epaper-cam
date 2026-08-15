@@ -15,3 +15,11 @@ frames/
 *.jpg
 *.jpeg
 *.rtf
+
+# Generated image data for PaperCam_ImageTest: ~1MB of source, derived from a
+# personal photo, and regenerated in one command by dither/tune --emit-header.
+PaperCam_ImageTest/image_data.h
+
+# Manufacturer datasheets: every page is footered "SEEKINK Confidential".
+# Kept locally; the facts we rely on are cited in CLAUDE.md instead.
+*.pdf
