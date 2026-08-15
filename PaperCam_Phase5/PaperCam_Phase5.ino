@@ -75,7 +75,13 @@ EPaper epaper;
  * SRAM is also meaningfully faster than PSRAM, and the ditherer touches the
  * scratch rows once per pixel — 384,000 times per photo.
  */
-static uint8_t packed[DITHER_OUT_BYTES];
+/*
+ * No packed output buffer any more. In 4-level grey mode the framebuffer is a
+ * 4bpp sprite that Seeed GFX already allocated — 192,001 bytes, 400 bytes per
+ * row, high nibble = even x — which is exactly the layout dither_fs_gray4
+ * emits. So we dither straight into it via getPointer() and the old 48KB
+ * 1-bit buffer disappears rather than growing to 192KB.
+ */
 static int16_t scratch[DITHER_SCRATCH_LEN];
 
 /*
@@ -90,7 +96,11 @@ static int16_t scratch[DITHER_SCRATCH_LEN];
  */
 // Named tone_cfg, not tone: the Arduino core declares tone(pin, freq, dur)
 // for piezo buzzers in Arduino.h, and a variable called `tone` shadows it.
-static const tone_params tone_cfg = TONE_DEFAULTS;
+//
+// Not const any more — the serial keys below retune it live. Tone is the one
+// part of this pipeline with no correct answer, only a preferred one, and a
+// 40-second reflash per guess is the wrong feedback loop for a judgement call.
+static tone_params tone_cfg = TONE_DEFAULTS;
 static uint8_t  tone_lut[256];
 static uint8_t *tone_a = nullptr;
 static uint8_t *tone_b = nullptr;
@@ -144,8 +154,10 @@ static bool camera_start(void)
 
 static void show_message(const char *line1, const char *line2)
 {
-    epaper.fillScreen(TFT_WHITE);
-    epaper.setTextColor(TFT_BLACK);
+    // Grey-mode constants, not TFT_WHITE/TFT_BLACK: in a 4bpp sprite only
+    // values 0..3 are meaningful, and 0xFFFF would mask down to 15.
+    epaper.fillScreen(TFT_GRAY_3);
+    epaper.setTextColor(TFT_GRAY_0);
     epaper.setTextSize(4);
     epaper.drawString(line1, 60, 190);
     if (line2) {
@@ -200,22 +212,31 @@ static void take_photo(void)
                tone_a, tone_b);
     const uint32_t t_tone = millis();
 
-    dither_fs(fb->buf, packed, scratch);
+    /*
+     * Dither straight into the sprite. getPointer() is the buffer the library
+     * will hand to its own gray push, so there is no intermediate copy and no
+     * second 192KB allocation.
+     */
+    uint8_t *fbuf = (uint8_t *)epaper.getPointer();
+    if (!fbuf) {
+        Serial.println("getPointer() returned NULL — not in grey mode?");
+        esp_camera_fb_return(fb);
+        return;
+    }
+    dither_fs_gray4(fb->buf, fbuf, scratch);
     const uint32_t t_dither = millis();
 
     /*
      * Hand the frame back before the refresh, not after. The panel update
      * blocks for ~3.4s, and holding the driver's only frame buffer across it
      * would stall the next capture for no reason. Borrow briefly, return
-     * early — the dithered result is already safe in `packed`.
+     * early — the dithered result is already safe in the sprite.
      */
     esp_camera_fb_return(fb);
     fb = nullptr;
 
-    // drawBitmap only paints the set bits, so the background has to be
-    // cleared first or the previous photo shows through.
-    epaper.fillScreen(TFT_WHITE);
-    epaper.drawBitmap(0, 0, packed, DITHER_OUT_W, DITHER_OUT_H, TFT_BLACK);
+    // No fillScreen: dither_fs_gray4 writes every pixel of the sprite, so
+    // there is nothing left of the previous photo to clear.
     epaper.update();
     const uint32_t t_done = millis();
 
@@ -250,6 +271,17 @@ void setup(void)
     epaper.begin();
     Serial.println("OK");
 
+    /*
+     * Four-level grey. The panel datasheet calls this a B/W display and keeps
+     * a B/W waveform in OTP; Seeed GFX overrides it with its own LUTs. Off
+     * spec, but confirmed on the bench as four distinct levels, and worth it:
+     * at 2 levels the dither's worst-case error is 127 and the diffusion has
+     * to smear it, which is the stipple. At 4 levels it is ~42 and the texture
+     * largely disappears.
+     */
+    epaper.initGrayMode(GRAY_LEVEL4);
+    Serial.println("initGrayMode(GRAY_LEVEL4)");
+
     Serial.print("esp_camera_init... ");
     if (!camera_start()) {
         show_message("CAMERA FAIL", "see serial");
@@ -276,11 +308,55 @@ void setup(void)
     }
 
     show_message("PaperCam", "press the shutter");
-    Serial.println("\nReady. Press the shutter.");
+    Serial.println("\nReady. Press the shutter, or 'x' to shoot.");
+    Serial.println("Tone keys (lower = less, upper = more):");
+    Serial.println("  s/S sharpen   g/G gamma   c/C contrast   r/R radius");
+    Serial.println("  0   sharpening off        ?   show current values");
+}
+
+static void print_tone(void)
+{
+    Serial.printf("tone: black=%u gamma=%.2f contrast=%.2f sharp=%.2f radius=%d\n",
+                  tone_cfg.black, (double)tone_cfg.gamma, (double)tone_cfg.contrast,
+                  (double)tone_cfg.sharp_amt, tone_cfg.sharp_rad);
+}
+
+/*
+ * Live tone tuning. Lower case decreases, upper case increases. Only the LUT
+ * needs rebuilding after a change, and that is 256 iterations — free.
+ */
+static void handle_key(int c)
+{
+    switch (c) {
+        case 's': tone_cfg.sharp_amt -= 0.1f; break;
+        case 'S': tone_cfg.sharp_amt += 0.1f; break;
+        case 'g': tone_cfg.gamma     -= 0.05f; break;
+        case 'G': tone_cfg.gamma     += 0.05f; break;
+        case 'c': tone_cfg.contrast  -= 0.05f; break;
+        case 'C': tone_cfg.contrast  += 0.05f; break;
+        case 'r': tone_cfg.sharp_rad  = (tone_cfg.sharp_rad > 1) ? tone_cfg.sharp_rad - 1 : 1; break;
+        case 'R': tone_cfg.sharp_rad += 1; break;
+        case '0': tone_cfg.sharp_amt  = 0.0f; break;   // sharpening fully off
+        case 'x': take_photo();  return;
+        case '?': print_tone();  return;
+        default:                 return;
+    }
+
+    if (tone_cfg.sharp_amt < 0.0f) tone_cfg.sharp_amt = 0.0f;
+    if (tone_cfg.gamma     < 0.1f) tone_cfg.gamma     = 0.1f;
+    if (tone_cfg.contrast  < 0.1f) tone_cfg.contrast  = 0.1f;
+
+    tone_build_lut(&tone_cfg, tone_lut);
+    print_tone();
+    Serial.println("press shutter or 'x' to re-shoot");
 }
 
 void loop(void)
 {
+    if (Serial.available()) {
+        handle_key(Serial.read());
+    }
+
     const uint32_t now = millis();
     const bool now_pressed = (digitalRead(PIN_SHUTTER) == LOW);
 
