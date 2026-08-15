@@ -139,11 +139,16 @@ uploads without error — blank panel, nothing to debug. Always include:
   not an aesthetic choice here, it is the only way to render tone.
 - OV2640 supports `PIXFORMAT_GRAYSCALE` natively — no JPEG decode, no
   RGB-to-luma step. The sensor hands over exactly what the dither needs.
+  **CONFIRMED (Phase 3):** `FRAMESIZE_SVGA` + `PIXFORMAT_GRAYSCALE` returns
+  exactly 800x600 at 480,000 bytes, one byte per pixel.
 - **Aspect ratio mismatch.** SVGA capture is 800x600 (4:3), panel is 800x480
   (5:3). Center-crop 120 rows: skip the first 60 and last 60. Every photo is
   landscape.
 - Memory: 800x600 grayscale = 480KB, packed 1-bit output = 48KB. Both trivial
-  in 8MB PSRAM. Multiple frames can be held for sharpness selection.
+  in 8MB PSRAM. **CONFIRMED (Phase 3):** one frame buffer costs 481,376 bytes
+  of PSRAM (480,000 plus driver overhead), leaving 7,904,720 free after
+  `esp_camera_init`. That is headroom for roughly 16 frames, so Phase 6's
+  burst-and-pick-sharpest is not memory constrained.
 - Full refresh measured at **3433 ms** — **CONFIRMED (Phase 1)**, identical
   across runs, so the waveform is deterministic. Use this figure for the
   Phase 7 power budget, not the ~5s estimate it replaces. Do not attempt
