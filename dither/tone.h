@@ -30,16 +30,21 @@ typedef struct {
 /*
  * Settled by sweeping real captures through dither/tune against three very
  * different frames: a flat mid-tone gallery wall, a backlit portrait, and a
- * high-key desk shot. Black coverage lands at 43-44% on all three.
+ * high-key desk shot.
  *
- * The counter-intuitive part is how little global contrast is wanted. The
- * first attempt used contrast 1.5-2.0 and it crushed the backlit portrait to
- * a silhouette. The unsharp mask is what actually makes a dithered image
- * read, because it creates separation locally at every edge; the global curve
- * then only has to keep the result from looking dark, which the gamma lift
- * does. Contrast above ~1.3 buys punch by throwing away tonal range.
+ * Contrast stays mild deliberately. The first attempt used 1.5-2.0 and it
+ * crushed the backlit portrait to a silhouette; contrast above ~1.3 buys
+ * punch by throwing away tonal range.
+ *
+ * Sharpening is OFF, and that is a bench result rather than an oversight. At
+ * 1-bit the unsharp mask was the main thing making edges read, and 0.9 was
+ * worth its cost. Moving to 4-level grey made it invisible — a side-by-side
+ * at 0.9 and 0.0 was indistinguishable on the panel — while still costing
+ * 863ms per shot, because the blur's vertical pass strides 800 bytes per read
+ * through PSRAM. The levels now do the work the mask used to. Raising this
+ * above zero reintroduces that 863ms, so measure before you do.
  */
-#define TONE_DEFAULTS { 8, 255, 1.35f, 1.20f, 0.90f, 3 }
+#define TONE_DEFAULTS { 8, 255, 1.35f, 1.20f, 0.00f, 3 }
 
 /*
  * All the global tone maths collapses into one 256-entry table, so the
