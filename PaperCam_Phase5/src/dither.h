@@ -46,6 +46,31 @@ extern "C" {
  */
 void dither_fs(const uint8_t *src, uint8_t *out, int16_t *scratch);
 
+/* ---------------------------------------------------------------------------
+ * 4-level greyscale.
+ *
+ * The panel datasheet calls this a B/W display and stores a B/W waveform in
+ * OTP, but Seeed GFX overrides it with custom LUTs (LUT_*_GRAY in
+ * UC8179_Defines.h) and gets four real levels out of it. Confirmed on the
+ * bench: four visibly distinct bands.
+ *
+ * Output matches the layout initGrayMode(GRAY_LEVEL4) gives its sprite: 4 bits
+ * per pixel, two pixels per byte, high nibble = even x, values 0..3 where
+ * 0 is black and 3 is white. 800x480 = 192,000 bytes, and dither_fs_gray4 can
+ * write straight into the sprite via getPointer().
+ *
+ * Four levels is not a small change for error diffusion. With two levels every
+ * pixel is wrong by up to 127 and the dither has to spread that error over a
+ * wide area, which is what produces the visible stipple. With four, worst-case
+ * error drops to ~42, so the diffusion stays local and the texture largely
+ * disappears.
+ * ------------------------------------------------------------------------ */
+
+#define DITHER_GRAY4_ROW_BYTES (DITHER_OUT_W / 2)                     /*    400 */
+#define DITHER_GRAY4_BYTES (DITHER_GRAY4_ROW_BYTES * DITHER_OUT_H)    /* 192,000 */
+
+void dither_fs_gray4(const uint8_t *src, uint8_t *out, int16_t *scratch);
+
 #ifdef __cplusplus
 }
 #endif

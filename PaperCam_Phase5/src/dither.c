@@ -78,3 +78,62 @@ void dither_fs(const uint8_t *src, uint8_t *out, int16_t *scratch)
         memset(err_next - 1, 0, (DITHER_OUT_W + 2) * sizeof(int16_t));
     }
 }
+
+/* ---------------------------------------------------------------------------
+ * 4-level variant. Same serpentine Floyd-Steinberg; only the quantiser and the
+ * output packing differ.
+ * ------------------------------------------------------------------------ */
+
+void dither_fs_gray4(const uint8_t *src, uint8_t *out, int16_t *scratch)
+{
+    const uint8_t *s = src + (size_t)DITHER_CROP_TOP * DITHER_SRC_W;
+
+    memset(out, 0, DITHER_GRAY4_BYTES);
+    memset(scratch, 0, DITHER_SCRATCH_LEN * sizeof(int16_t));
+
+    int16_t *err_cur  = scratch + 1;
+    int16_t *err_next = scratch + (DITHER_OUT_W + 2) + 1;
+
+    for (int y = 0; y < DITHER_OUT_H; y++) {
+        const uint8_t *srow = s   + (size_t)y * DITHER_SRC_W;
+        uint8_t       *orow = out + (size_t)y * DITHER_GRAY4_ROW_BYTES;
+
+        const int ltr  = ((y & 1) == 0);
+        const int step = ltr ? 1 : -1;
+        int       x    = ltr ? 0 : DITHER_OUT_W - 1;
+
+        for (int i = 0; i < DITHER_OUT_W; i++, x += step) {
+            int32_t old = (int32_t)srow[x] + (int32_t)err_cur[x];
+            if (old < 0)   old = 0;
+            if (old > 255) old = 255;
+
+            /* Nearest of 4 evenly spaced levels. +42 rounds to nearest rather
+             * than flooring, which would bias the whole image dark. */
+            int32_t level = (old + 42) / 85;
+            if (level > 3) level = 3;
+
+            const int32_t e = old - level * 85;
+
+            /* High nibble is the even-x pixel, matching the sprite layout
+             * initGrayMode(GRAY_LEVEL4) sets up. */
+            if ((x & 1) == 0) {
+                orow[x >> 1] |= (uint8_t)(level << 4);
+            } else {
+                orow[x >> 1] |= (uint8_t)level;
+            }
+
+            const int fwd = x + step;
+            const int bwd = x - step;
+
+            err_cur[fwd]  += (int16_t)((e * 7) / 16);
+            err_next[bwd] += (int16_t)((e * 3) / 16);
+            err_next[x]   += (int16_t)((e * 5) / 16);
+            err_next[fwd] += (int16_t)((e * 1) / 16);
+        }
+
+        int16_t *tmp = err_cur;
+        err_cur  = err_next;
+        err_next = tmp;
+        memset(err_next - 1, 0, (DITHER_OUT_W + 2) * sizeof(int16_t));
+    }
+}
