@@ -1,7 +1,8 @@
 # PaperCam — Hardware Reference
 
-E-paper camera. Press a button, it takes a photo, dithers it to 1-bit, and
-paints it onto a 7.5" e-paper panel where it stays with zero power draw.
+E-paper camera. Press a button, it takes a photo, dithers it to 4-level
+greyscale, and paints it onto a 7.5" e-paper panel where it stays with zero
+power draw.
 
 This file is the authoritative hardware reference. Facts here were verified
 against Seeed's wiki. Anything marked **VERIFY** has not been confirmed on
@@ -16,7 +17,7 @@ were measured on the bench, with the phase that measured them.
 |---|---|
 | Seeed XIAO ESP32S3 **Sense** | OV2640 camera, 8MB PSRAM, 8MB flash |
 | Seeed **ePaper Driver Board** (SKU 114993558) | JST BAT connector, charging IC, power switch, 24-pin FPC |
-| Seeed 7.5" Monochrome ePaper, 800x480 (SKU p-5788) | 1-bit only, no grayscale |
+| Seeed 7.5" Monochrome ePaper, 800x480 (SKU p-5788) | Panel **T075A04**, UC8179 controller. Sold as B/W; does 4-level grey — see below |
 | LiPo cell w/ JST 2.0mm | into the Driver Board's BAT connector |
 | Momentary button | shutter, wired D5 to GND |
 
@@ -135,8 +136,30 @@ uploads without error — blank panel, nothing to debug. Always include:
 
 ## Image pipeline constraints
 
-- Panel is **1-bit**. No grayscale, no partial refresh planned. Dithering is
-  not an aesthetic choice here, it is the only way to render tone.
+- **CORRECTED (Phase 5): the panel does 4-level greyscale, and we use it.**
+  This file previously claimed 1-bit only and that dithering was the only way
+  to render tone. Both were wrong, and the error cost real time — it is the
+  single most expensive mistake in this document so far.
+
+  The T075A04 datasheet does say B/W, and stores a B/W waveform in on-chip
+  OTP. Seeed GFX overrides it with its own LUTs (`LUT_VCOM_GRAY`,
+  `LUT_WW_GRAY`, `LUT_KW_GRAY`, `LUT_WK_GRAY`, `LUT_KK_GRAY` in
+  `UC8179_Defines.h`) and gets four genuinely distinct levels. Off-spec — the
+  datasheet guarantees its optical figures "only under the controller &
+  waveform provided by XingTai" — but confirmed on the bench.
+
+  `epaper.initGrayMode(GRAY_LEVEL4)`. Note `GRAY_LEVEL16` exists in Seeed's
+  newer examples but **not** in the installed library, and the panel's
+  contrast would not support it anyway: white is L\*=63 and black L\*=32, so
+  16 levels means ~2 L\* per step against a ghosting spec of ΔE ≤ 2. The steps
+  would be the size of the noise. Four is the right number.
+
+  Why it matters so much: at 2 levels every pixel is wrong by up to 127 and
+  Floyd-Steinberg must smear that error over a wide area — that smearing *is*
+  the visible stipple. At 4 levels worst-case error drops to ~42, diffusion
+  stays local, and the texture largely disappears.
+
+- No partial refresh planned.
 - OV2640 supports `PIXFORMAT_GRAYSCALE` natively — no JPEG decode, no
   RGB-to-luma step. The sensor hands over exactly what the dither needs.
   **CONFIRMED (Phase 3):** `FRAMESIZE_SVGA` + `PIXFORMAT_GRAYSCALE` returns
@@ -149,10 +172,38 @@ uploads without error — blank panel, nothing to debug. Always include:
   of PSRAM (480,000 plus driver overhead), leaving 7,904,720 free after
   `esp_camera_init`. That is headroom for roughly 16 frames, so Phase 6's
   burst-and-pick-sharpest is not memory constrained.
-- Full refresh measured at **3433 ms** — **CONFIRMED (Phase 1)**, identical
-  across runs, so the waveform is deterministic. Use this figure for the
-  Phase 7 power budget, not the ~5s estimate it replaces. Do not attempt
-  partial refresh.
+- Refresh, both **CONFIRMED** and deterministic to the millisecond across runs:
+
+  | mode | refresh | vs mono |
+  |---|---|---|
+  | 1-bit (Phase 1) | 3433 ms | — |
+  | 4-level grey (Phase 5) | 5074 ms | 1.48x |
+
+  Greyscale costs 1.6s a shot. Worth it without argument. Full shot pipeline
+  is capture ~0ms (the driver keeps a frame buffered), tone 30ms, dither
+  135ms, paint 5074ms — about 5.2s shutter to image.
+
+### Panel datasheet figures (T075A04)
+
+From the manufacturer spec. The PDF is kept locally and deliberately not
+committed — every page is footered "SEEKINK Confidential".
+
+| | |
+|---|---|
+| Controller | UC8179 |
+| Pixel pitch / DPI | 0.204mm / 124 |
+| White state | L\* = 63 (~31.6% reflectance) |
+| Black state | L\* = 32 (~7.1% reflectance) |
+| Contrast ratio | ~4.5:1 |
+| Ghosting | ΔE ≤ 2 |
+| Charge per update | 100 mAs (0.028 mAh) |
+| Update current | 11 mA max |
+| Panel deep sleep | 7 µA max |
+
+**The panel is not the power problem.** A 1000mAh cell covers roughly 36,000
+refreshes on panel energy alone. Phase 7 should point at the Sense board's
+sleep current instead. The datasheet also suggests updating at least once a
+day for pixel health, which matters for something that sits in a frame.
 
 ### Packed buffer format
 
@@ -174,6 +225,23 @@ we only have to be consistent with the library.
 its solid marker top-left and its hollow marker bottom-right as intended, and
 Test B ruled out both 180° rotation and horizontal mirroring. Row 0 of the
 packed buffer is the top row of the panel; write rows in natural order.
+
+### 4-level greyscale format (what we actually use)
+
+`initGrayMode(GRAY_LEVEL4)` replaces the framebuffer with a **4bpp sprite**:
+two pixels per byte, **high nibble = even x**, values 0..3 where 0 is black.
+800x480 = 192,000 bytes, 400 bytes per row, no row padding — verified in
+`Sprite.cpp`, which allocates `((w*h)>>1)+1` with w forced even.
+
+`dither_fs_gray4` emits exactly this, so it writes **straight into the sprite
+via `getPointer()`**. No intermediate buffer, no copy, and the 1-bit path's
+48KB `packed` array is gone rather than grown to 192KB.
+
+**OPEN:** the ditherer assumes the four levels render at 0/85/170/255, evenly
+spaced. They almost certainly do not — if the levels are perceptually even in
+L\*, the real luminances are nearer 0/58/142/255. Error diffusion subtracts
+the *assumed* value, so a wrong table becomes a systematic tonal shift the
+algorithm can never correct for. Needs measuring; see the calibration sketch.
 
 ---
 
