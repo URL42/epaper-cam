@@ -1,2 +1,7 @@
 .DS_Store
 build/
+
+# native dither harness
+dither/test_dither
+*.pbm
+*.pgm
