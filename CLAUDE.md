@@ -5,7 +5,8 @@ paints it onto a 7.5" e-paper panel where it stays with zero power draw.
 
 This file is the authoritative hardware reference. Facts here were verified
 against Seeed's wiki. Anything marked **VERIFY** has not been confirmed on
-the bench yet — confirm before building on it.
+the bench yet — confirm before building on it. Items marked **CONFIRMED**
+were measured on the bench, with the phase that measured them.
 
 ---
 
@@ -78,6 +79,22 @@ Board: **XIAO_ESP32S3**
 | USB CDC On Boot | **Enabled** | `Serial` output goes nowhere |
 | Partition Scheme | 8M with spiffs, or Huge APP | build overflows |
 
+The USB CDC trap bit us in Phase 1 and is worth spelling out: this board has
+no USB-to-UART bridge, so with CDC off the core maps `Serial` to UART0 on
+GPIO43/44 — physical pins with nothing attached. The port still enumerates
+and esptool still flashes fine, because flashing uses the USB-Serial/JTAG
+peripheral rather than `Serial`. **A working upload is not evidence that
+`Serial` works.**
+
+Don't trust the Tools menu; read what was actually compiled:
+
+```bash
+cat ~/Library/Caches/arduino/sketches/*/build.options.json
+```
+
+The `fqbn` field lists every menu selection. Want `CDCOnBoot=cdc` and
+`PSRAM=opi`; `CDCOnBoot=default` means disabled.
+
 ---
 
 ## Libraries
@@ -88,20 +105,31 @@ Board: **XIAO_ESP32S3**
 
 ### driver.h
 
-Generate with the config tool linked from the Driver Board wiki. Select the
-7.5" mono panel and the **Driver Board**. Do not guess the combo number — a
-wrong value produces a blank screen with no error.
+Lives in the sketch folder, not the library folder, so it survives library
+updates and does not leak into other sketches.
 
 ```cpp
-#define BOARD_SCREEN_COMBO <from generator>
+#define BOARD_SCREEN_COMBO 502   // 7.5" mono 800x480, UC8179
 #define USE_XIAO_EPAPER_DRIVER_BOARD
 ```
 
-**VERIFY:** Seeed's Driver Board wiki page shows
-`USE_XIAO_EPAPER_BREAKOUT_BOARD` in its example, which appears to be a
-copy-paste error from the Breakout page. If the generator emits `BREAKOUT`
-and the panel misbehaves, try `DRIVER` and check the library headers for the
-exact macro name.
+**CONFIRMED (Phase 1).** Both values are right. The macro question is settled:
+the Driver Board wiki's `USE_XIAO_EPAPER_BREAKOUT_BOARD` is a copy-paste error
+from the Breakout page. Source for the correct pair is Seeed's 7.5" panel
+Arduino cookbook, not the Driver Board page:
+
+  https://wiki.seeedstudio.com/xiao_075inch_epaper_panel_arduino/
+
+**Guard against the silent failure.** Seeed's examples wrap their bodies in
+`#ifdef EPAPER_ENABLE`, which the library defines only when it recognises the
+combo/board pair. A wrong combo therefore compiles to an empty program and
+uploads without error — blank panel, nothing to debug. Always include:
+
+```cpp
+#ifndef EPAPER_ENABLE
+#error "EPAPER_ENABLE not defined — driver.h not picked up, or bad combo pair."
+#endif
+```
 
 ---
 
@@ -116,16 +144,31 @@ exact macro name.
   landscape.
 - Memory: 800x600 grayscale = 480KB, packed 1-bit output = 48KB. Both trivial
   in 8MB PSRAM. Multiple frames can be held for sharpness selection.
-- Full refresh takes roughly 5 seconds. Do not attempt partial refresh.
+- Full refresh measured at **3433 ms** — **CONFIRMED (Phase 1)**, identical
+  across runs, so the waveform is deterministic. Use this figure for the
+  Phase 7 power budget, not the ~5s estimate it replaces. Do not attempt
+  partial refresh.
 
 ### Packed buffer format
 
 800x480 at 1bpp = 48,000 bytes, 100 bytes per row. MSB-first within each byte
 (bit 7 = leftmost pixel).
 
-**VERIFY:** bit polarity. Seeed's image-conversion docs list "Reverse color"
-as checked for this panel, which suggests 0 = black. Confirm empirically in
-Phase 1 with a half-black test pattern rather than trusting this.
+**CONFIRMED (Phase 1): set bit = black.** A buffer with the left half `0xFF`
+and the right half `0x00`, pushed via `drawBitmap(..., TFT_BLACK)`, rendered
+left-black / right-white. So the ditherer emits **1 for black pixels** and we
+pass `TFT_BLACK` as the foreground colour.
+
+The "Reverse color" checkbox in Seeed's image-conversion docs was a red
+herring — it describes *their* converter's output format. We generate our own
+buffer and go through `drawBitmap`, whose convention is "set bit = the
+foreground colour you passed." The library owns the panel's native polarity;
+we only have to be consistent with the library.
+
+**CONFIRMED (Phase 1): origin is top-left, no rotation needed.** Test A drew
+its solid marker top-left and its hollow marker bottom-right as intended, and
+Test B ruled out both 180° rotation and horizontal mirroring. Row 0 of the
+packed buffer is the top row of the panel; write rows in natural order.
 
 ---
 
@@ -133,7 +176,9 @@ Phase 1 with a half-black test pattern rather than trusting this.
 
 **Brownout during refresh.** The panel's charge pump spikes hard. If the ESP
 resets mid-refresh, add 100uF electrolytic across 3V3/GND near the FPC
-connector.
+connector. **Did not occur on USB power (Phase 1)** — repeated full refreshes
+completed with no reset. Still open on battery, which is a weaker supply;
+re-check at Phase 7.
 
 **Deep sleep current.** A bare XIAO ESP32S3 sleeps around 14uA. The Sense
 expansion board with the camera attached is substantially worse and reports
