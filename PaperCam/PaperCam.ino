@@ -36,12 +36,20 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// Shutter. Still the onboard BOOT button; set to 0 once a switch is wired to
-// D5. GPIO0 cannot be the final choice — the ROM re-samples strapping pins on
-// deep-sleep wake, so Phase 7 needs D5 regardless.
+// Shutter on D5 (GPIO6): momentary switch to GND, INPUT_PULLUP.
+//
+// D5 was always the destination. GPIO0 served during bring-up because no
+// switch was wired yet, but it cannot be the final choice — the ROM re-samples
+// strapping pins coming out of deep sleep, so a wake triggered by holding
+// GPIO0 low would drop into download mode instead of taking a photo. GPIO6 is
+// RTC-capable and carries no strapping role.
+//
+// Deep sleep will need more than INPUT_PULLUP: the pad moves to the RTC domain
+// where the internal pullup stops holding, and the board then wakes on noise.
+// Either rtc_gpio_pullup_en() plus pad hold, or an external 10k to 3V3.
 // ---------------------------------------------------------------------------
 
-#define USE_BOOT_BUTTON 1
+#define USE_BOOT_BUTTON 0
 
 #if USE_BOOT_BUTTON
 static constexpr uint8_t  PIN_SHUTTER = 0;
@@ -52,6 +60,27 @@ static constexpr char     PIN_LABEL[] = "D5 (GPIO6)";
 #endif
 
 static constexpr uint32_t DEBOUNCE_MS = 25;
+
+/*
+ * Tap versus hold.
+ *
+ * Tap  (release before HOLD_MS) — take a photo.
+ * Hold (still down at HOLD_MS)  — upload the last photo. Not wired up yet.
+ *
+ * The trigger moves from the press edge to the release, which normally costs
+ * responsiveness. Here it costs nothing: the self-timer already imposes three
+ * seconds before capture, so up to 1.5s spent deciding tap-or-hold is
+ * invisible. The two features fit together by luck rather than design.
+ *
+ * Hold fires the instant the threshold passes rather than waiting for release,
+ * so the LED can acknowledge it while your finger is still down — the same
+ * reasoning as the original Phase 2 button, and the reason for hold_fired,
+ * which suppresses the tap that would otherwise follow on release.
+ */
+static constexpr uint32_t HOLD_MS = 1500;
+
+static uint32_t press_started = 0;
+static bool     hold_fired    = false;
 
 /*
  * Self-timer, so you can get into the shot.
@@ -608,6 +637,23 @@ void setup(void)
     Serial.println("  [/] sensor sharpness   ;/' denoise   -/= exposure bias");
 }
 
+/*
+ * Hold action. Upload lands here in step 3 of the Phase 7 build; for now it
+ * only acknowledges, so the button behaviour can be confirmed on its own
+ * before WiFi is in the picture.
+ *
+ * Three quick flashes — distinct from the self-timer's blink and from the
+ * solid "capturing", so the gestures stay distinguishable across a room.
+ */
+static void on_hold(void)
+{
+    Serial.println("HOLD — upload not wired up yet");
+    for (int i = 0; i < 3; i++) {
+        digitalWrite(PIN_LED, LED_ON);  delay(60);
+        digitalWrite(PIN_LED, LED_OFF); delay(60);
+    }
+}
+
 static void print_tone(void)
 {
     Serial.printf("tone: black=%u gamma=%.2f contrast=%.2f sharp=%.2f radius=%d\n",
@@ -738,15 +784,23 @@ void loop(void)
     if ((now - last_raw_change) >= DEBOUNCE_MS && raw_pressed != stable_pressed) {
         stable_pressed = raw_pressed;
 
-        /*
-         * Fires on the press edge, not the release. Phase 2 reported TAP on
-         * release so it could tell a tap from a hold; with hold detection out
-         * of the picture here, waiting for release would just add the length
-         * of your press to the shutter lag. A camera should respond when you
-         * push the button.
-         */
         if (stable_pressed) {
+            // Press: start the clock, commit to nothing. Whether this is a tap
+            // or a hold is not knowable yet.
+            press_started = now;
+            hold_fired    = false;
+        } else if (!hold_fired) {
+            // Released before the hold threshold, so it was a tap. If hold
+            // already fired we stay quiet: one physical press, one action.
+            Serial.printf("TAP (%lu ms)\n", (unsigned long)(now - press_started));
             take_photo();
         }
+    }
+
+    // Hold fires at the threshold rather than on release, so the LED can
+    // acknowledge it while your finger is still down.
+    if (stable_pressed && !hold_fired && (now - press_started) >= HOLD_MS) {
+        hold_fired = true;
+        on_hold();
     }
 }
