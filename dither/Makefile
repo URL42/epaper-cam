@@ -17,7 +17,7 @@ CFLAGS := -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion
 # canonical one. Editing a sketch copy directly and then wondering why the
 # tests still pass is the failure `verify` guards against.
 MODULES  := dither.c dither.h tone.c tone.h
-SKETCHES := ../PaperCam_Phase5
+SKETCHES := ../PaperCam_Phase5 ../PaperCam_Phase6
 
 .PHONY: all test clean sync verify
 
