@@ -253,15 +253,28 @@ static int       burst_n          = BURST_DEFAULT;
  * denoise 5 targets the grain that averaging alone did not finish off.
  *
  * ae_level stays 0 — biasing exposure was tried and made things worse.
+ *
+ * vflip and hmirror are both OFF, and that is the correct setting for the
+ * intended mounting: camera above the panel, landscape. Earlier photos looked
+ * inverted only because the board was being held loose at the bench.
+ *
+ * Kept as knobs rather than hardcoded, because the enclosure decides this.
+ * Both on is a 180-degree rotation; either alone is a mirror, which is worse
+ * than upside down because text becomes unreadable rather than merely wrong
+ * way up. The sensor's DSP applies these during readout, so they cost nothing.
  */
 static constexpr int CAM_SHARPNESS = 3;
 static constexpr int CAM_DENOISE   = 5;
 static constexpr int CAM_AE_LEVEL  = 0;
+static constexpr int CAM_VFLIP     = 0;
+static constexpr int CAM_HMIRROR   = 0;
 
 static sensor_t *cam = nullptr;
 static int cam_sharpness = CAM_SHARPNESS;
 static int cam_denoise   = CAM_DENOISE;
 static int cam_ae_level  = CAM_AE_LEVEL;
+static int cam_vflip     = CAM_VFLIP;
+static int cam_hmirror   = CAM_HMIRROR;
 
 static bool     raw_pressed     = false;
 static bool     stable_pressed  = false;
@@ -715,8 +728,12 @@ void setup(void)
         const int rs = cam->set_sharpness ? cam->set_sharpness(cam, CAM_SHARPNESS) : -1;
         const int rd = cam->set_denoise   ? cam->set_denoise(cam, CAM_DENOISE)     : -1;
         const int ra = cam->set_ae_level  ? cam->set_ae_level(cam, CAM_AE_LEVEL)   : -1;
+        const int rv = cam->set_vflip     ? cam->set_vflip(cam, CAM_VFLIP)         : -1;
+        const int rh = cam->set_hmirror   ? cam->set_hmirror(cam, CAM_HMIRROR)     : -1;
         Serial.printf("sensor defaults: sharpness=%d(rc %d) denoise=%d(rc %d) ae=%d(rc %d)\n",
                       CAM_SHARPNESS, rs, CAM_DENOISE, rd, CAM_AE_LEVEL, ra);
+        Serial.printf("                 vflip=%d(rc %d) hmirror=%d(rc %d)\n",
+                      CAM_VFLIP, rv, CAM_HMIRROR, rh);
 
         Serial.printf("sensor PID 0x%04x\n", cam->id.PID);
         Serial.println("control support:");
@@ -805,6 +822,7 @@ void setup(void)
     Serial.println("  j   show the stored JPEG    u   upload it now    z   sleep now");
     Serial.println("Sensor keys (OV3660 supports all of these):");
     Serial.println("  [/] sensor sharpness   ;/' denoise   -/= exposure bias");
+    Serial.println("  v   flip vertically    h   mirror horizontally (both = 180 rotate)");
     Serial.printf("Sleeping after %lu minutes idle.\n",
                   (unsigned long)(SLEEP_AFTER_MS / 60000UL));
 
@@ -1009,6 +1027,17 @@ static void handle_key(int c)
 
         /* Burst size. 1 disables averaging entirely, which is the direct A/B
          * against Phase 5 — same pipeline, single frame. */
+        case 'v':
+            cam_vflip = !cam_vflip;
+            Serial.printf("vflip = %d (rc %d)\n", cam_vflip,
+                          cam && cam->set_vflip ? cam->set_vflip(cam, cam_vflip) : -1);
+            return;
+        case 'h':
+            cam_hmirror = !cam_hmirror;
+            Serial.printf("hmirror = %d (rc %d)\n", cam_hmirror,
+                          cam && cam->set_hmirror ? cam->set_hmirror(cam, cam_hmirror) : -1);
+            return;
+
         case 'u': on_hold(); return;
         case 'z': go_to_sleep("asked"); return;   // never returns
 
