@@ -23,3 +23,6 @@ bench/ImageTest/image_data.h
 # Manufacturer datasheets: every page is footered "SEEKINK Confidential".
 # Kept locally; the facts we rely on are cited in CLAUDE.md instead.
 *.pdf
+
+# WiFi credentials and the upload endpoint. The repo is public.
+PaperCam/secrets.h

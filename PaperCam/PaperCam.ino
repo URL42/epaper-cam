@@ -30,8 +30,21 @@
 #include "esp_camera.h"
 #include "img_converters.h"   // fmt2jpg, ships with esp32-camera
 #include <LittleFS.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
 #include "src/dither.h"
 #include "src/tone.h"
+
+/*
+ * Credentials live in secrets.h, which is gitignored — this repository is
+ * public. __has_include rather than a hard include so the sketch still builds
+ * for anyone who clones it without inventing credentials first; upload is
+ * simply disabled and a hold says so.
+ */
+#if __has_include("secrets.h")
+  #include "secrets.h"
+  #define PAPERCAM_HAVE_SECRETS 1
+#endif
 
 #ifndef EPAPER_ENABLE
 #error "EPAPER_ENABLE not defined — driver.h not picked up, or bad combo pair."
@@ -714,26 +727,137 @@ void setup(void)
     Serial.println("  s/S sharpen   g/G gamma   c/C contrast   r/R radius");
     Serial.println("  0   sharpening off        ?   show current values");
     Serial.println("  n/N burst frames (1 = no averaging)   t/T self-timer +/-1s");
-    Serial.println("  j   show the stored JPEG");
+    Serial.println("  j   show the stored JPEG    u   upload it now");
     Serial.println("Sensor keys (OV3660 supports all of these):");
     Serial.println("  [/] sensor sharpness   ;/' denoise   -/= exposure bias");
 }
 
-/*
- * Hold action. Upload lands here in step 3 of the Phase 7 build; for now it
- * only acknowledges, so the button behaviour can be confirmed on its own
- * before WiFi is in the picture.
+/* ---------------------------------------------------------------------------
+ * Upload.
  *
- * Three quick flashes — distinct from the self-timer's blink and from the
- * solid "capturing", so the gestures stay distinguishable across a room.
+ * WiFi stays off until you ask for it. That is the whole design: idle WiFi is
+ * what drains a battery, while a connect-send-disconnect cycle costs roughly
+ * 0.15 mAh — about five times a panel refresh, but still some 5,000 uploads
+ * from a 1000mAh cell.
+ *
+ * Because uploading is a deliberate gesture rather than something that happens
+ * on every shot, there is no retry queue, no backoff and no silent failure. If
+ * it fails you hold the button again.
+ * ------------------------------------------------------------------------ */
+
+static void led_flash(int times, uint32_t ms)
+{
+    for (int i = 0; i < times; i++) {
+        digitalWrite(PIN_LED, LED_ON);  delay(ms);
+        digitalWrite(PIN_LED, LED_OFF); delay(ms);
+    }
+}
+
+#ifdef PAPERCAM_HAVE_SECRETS
+static bool wifi_connect(uint32_t timeout_ms)
+{
+    Serial.printf("connecting to %s", WIFI_SSID);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+    const uint32_t t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - t0) < timeout_ms) {
+        // Slow blink while connecting — distinct from the self-timer's
+        // accelerating blink and from solid "capturing".
+        digitalWrite(PIN_LED, ((millis() / 250) & 1) ? LED_OFF : LED_ON);
+        delay(10);
+    }
+    digitalWrite(PIN_LED, LED_OFF);
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.printf(" FAILED after %lu ms\n", (unsigned long)(millis() - t0));
+        return false;
+    }
+    Serial.printf(" ok, %s, %ld dBm, %lu ms\n",
+                  WiFi.localIP().toString().c_str(), (long)WiFi.RSSI(),
+                  (unsigned long)(millis() - t0));
+    return true;
+}
+
+static void wifi_off(void)
+{
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+}
+
+static bool upload_last(void)
+{
+    fs::File f = LittleFS.open(JPEG_PATH, "r");
+    if (!f || f.size() == 0) {
+        Serial.printf("%s: nothing to upload\n", JPEG_PATH);
+        if (f) f.close();
+        return false;
+    }
+    const size_t len = f.size();
+
+    HTTPClient http;
+    if (!http.begin(UPLOAD_URL)) {
+        Serial.println("http.begin failed — check UPLOAD_URL");
+        f.close();
+        return false;
+    }
+    http.addHeader("Content-Type", "image/jpeg");
+    if (strlen(UPLOAD_TOKEN) > 0) http.addHeader("X-PaperCam-Token", UPLOAD_TOKEN);
+
+    Serial.printf("POST %u bytes to %s ... ", (unsigned)len, UPLOAD_URL);
+    const uint32_t t0 = millis();
+
+    // Streamed from flash rather than read into RAM. 37KB would fit easily,
+    // but streaming costs nothing and keeps working if the photo grows.
+    const int code = http.sendRequest("POST", &f, len);
+    const uint32_t ms = millis() - t0;
+
+    f.close();
+    http.end();
+
+    if (code >= 200 && code < 300) {
+        Serial.printf("HTTP %d in %lu ms\n", code, (unsigned long)ms);
+        return true;
+    }
+    // Negative codes are HTTPClient's own errors (connection refused, timeout);
+    // positive ones came from the server.
+    Serial.printf("HTTP %d in %lu ms — %s\n", code, (unsigned long)ms,
+                  code < 0 ? "could not reach the endpoint" : "server rejected it");
+    return false;
+}
+#endif  /* PAPERCAM_HAVE_SECRETS */
+
+/*
+ * Hold action: send the last photo.
+ *
+ * LED language, continuing what the self-timer established — slow blink while
+ * connecting, one long solid on success, rapid flashes on failure. The point
+ * is knowing the outcome from across the room without a serial monitor.
  */
 static void on_hold(void)
 {
-    Serial.println("HOLD — upload not wired up yet");
-    for (int i = 0; i < 3; i++) {
-        digitalWrite(PIN_LED, LED_ON);  delay(60);
-        digitalWrite(PIN_LED, LED_OFF); delay(60);
+#ifndef PAPERCAM_HAVE_SECRETS
+    Serial.println("HOLD — upload disabled: copy secrets.h.example to secrets.h");
+    led_flash(3, 60);
+#else
+    Serial.println("\n--- upload ---");
+
+    bool ok = false;
+    if (wifi_connect(15000)) {
+        ok = upload_last();
     }
+    wifi_off();
+
+    if (ok) {
+        digitalWrite(PIN_LED, LED_ON);
+        delay(800);
+        digitalWrite(PIN_LED, LED_OFF);
+    } else {
+        led_flash(6, 70);
+    }
+    Serial.printf("upload %s, wifi off, free heap %u\n",
+                  ok ? "OK" : "FAILED", (unsigned)ESP.getFreeHeap());
+#endif
 }
 
 static void print_tone(void)
@@ -778,6 +902,8 @@ static void handle_key(int c)
 
         /* Burst size. 1 disables averaging entirely, which is the direct A/B
          * against Phase 5 — same pipeline, single frame. */
+        case 'u': on_hold(); return;
+
         case 'j': {
             fs::File f = LittleFS.open(JPEG_PATH, "r");
             if (!f) { Serial.printf("%s: not present\n", JPEG_PATH); return; }
