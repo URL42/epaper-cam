@@ -651,7 +651,10 @@ void setup(void)
      * EXT0 wake with nobody touching the button means the RTC pullup is losing
      * to noise on the button leads.
      */
-    switch (esp_sleep_get_wakeup_cause()) {
+    const esp_sleep_wakeup_cause_t wake_cause = esp_sleep_get_wakeup_cause();
+    const bool from_sleep = (wake_cause != ESP_SLEEP_WAKEUP_UNDEFINED);
+
+    switch (wake_cause) {
         case ESP_SLEEP_WAKEUP_EXT0:
             Serial.println("woke: shutter pressed");
             break;
@@ -659,7 +662,7 @@ void setup(void)
             Serial.println("woke: power-on or reset (not from sleep)");
             break;
         default:
-            Serial.printf("woke: cause %d\n", (int)esp_sleep_get_wakeup_cause());
+            Serial.printf("woke: cause %d\n", (int)wake_cause);
             break;
     }
 
@@ -781,7 +784,19 @@ void setup(void)
         if (fb) esp_camera_fb_return(fb);
     }
 
-    show_message("PaperCam", "press the shutter");
+    /*
+     * Welcome screen on a cold boot only.
+     *
+     * Waking runs setup() from the top, so an unconditional show_message here
+     * repaints the panel every time and destroys the photograph the device
+     * just spent five minutes asleep preserving. Error paths above still paint
+     * deliberately — a failure is worth losing the picture over.
+     */
+    if (!from_sleep) {
+        show_message("PaperCam", "press the shutter");
+    } else {
+        Serial.println("woke from sleep — panel left untouched");
+    }
     Serial.println("\nReady. Press the shutter, or 'x' to shoot.");
     Serial.println("Tone keys (lower = less, upper = more):");
     Serial.println("  s/S sharpen   g/G gamma   c/C contrast   r/R radius");
