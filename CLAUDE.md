@@ -11,6 +11,33 @@ were measured on the bench, with the phase that measured them.
 
 ---
 
+## Layout
+
+```
+PaperCam/        the camera. This is the thing.
+bench/           diagnostics, each answering one question about the hardware
+  FocusAssist/     sharpness score over serial, for setting the lens
+  GrayCalib/       measures the real grey level values
+  GrayTest/        1-bit vs 4-level: do the levels work, what do they cost
+  ImageTest/       pushes a known-good image, no camera — the panel's ceiling
+  FrameDump/       sends a raw frame to the Mac over serial
+dither/          dither + tone modules, native harness, tone playground
+tools/           recv_frame.py, make_testchart.py
+frames/          captured references (gitignored — real home, real faces)
+```
+
+Arduino only compiles sources inside a sketch folder, so `PaperCam/src/`
+carries a copy of `dither.*` and `tone.*`. `dither/` is canonical: `make sync`
+pushes copies out, `make verify` fails if one has drifted. Editing a sketch
+copy and then watching the tests pass against the other file is the failure
+that guards against.
+
+The phased bring-up sketches (panel, button, camera, first working camera) are
+gone; `bench/` covers the same diagnostics with less duplication. They are in
+git history if a regression ever needs bisecting.
+
+---
+
 ## Bill of materials (all on hand)
 
 | Part | Notes |

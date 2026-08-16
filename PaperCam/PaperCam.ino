@@ -1,8 +1,14 @@
 /*
- * PaperCam — Phase 6: burst capture, sharpness rejection, frame averaging
+ * PaperCam — the camera.
  *
- * Phase 5 plus a burst. Grab several frames, score each by variance of the
- * Laplacian, discard the ones that got shaken, average what survives.
+ * Press the shutter: a 3-second self-timer, then a burst of frames, scored by
+ * variance of the Laplacian, the shaken ones discarded and the rest averaged.
+ * Tone mapped, dithered to 4-level grey, painted on the panel, where it stays
+ * with no power.
+ *
+ * Grew out of the phased bring-up: panel, button, camera, ditherer, first
+ * working camera, burst. Those sketches are gone; bench/ keeps the tools that
+ * are still useful for diagnosing hardware.
  *
  * The target is NOISE, not blur — a deliberate departure from the original
  * plan of "keep the sharpest frame". That plan is right when the enemy is
@@ -46,6 +52,24 @@ static constexpr char     PIN_LABEL[] = "D5 (GPIO6)";
 #endif
 
 static constexpr uint32_t DEBOUNCE_MS = 25;
+
+/*
+ * Self-timer, so you can get into the shot.
+ *
+ * GPIO21 is the XIAO's user LED and clashes with nothing — the camera holds
+ * 10-18, 38-40 and 47-48, the panel holds 1, 2, 3, 4, 7 and 9. It is active
+ * LOW, which is why ON is 0 below.
+ *
+ * The blink accelerates over the last second. A steady blink tells you a timer
+ * is running but not when it will fire; speeding up is what makes it possible
+ * to be looking at the lens at the right moment rather than guessing.
+ */
+static constexpr uint8_t  PIN_LED  = LED_BUILTIN;   /* GPIO21 */
+static constexpr uint8_t  LED_ON   = LOW;
+static constexpr uint8_t  LED_OFF  = HIGH;
+static constexpr uint32_t SELF_TIMER_DEFAULT_MS = 3000;
+
+static uint32_t self_timer_ms = SELF_TIMER_DEFAULT_MS;
 
 // ---------------------------------------------------------------------------
 // Camera pins — XIAO ESP32S3 Sense, from the core's camera_pins.h.
@@ -104,16 +128,6 @@ static uint8_t  tone_lut[256];
 static uint8_t *tone_a = nullptr;
 static uint8_t *tone_b = nullptr;
 
-/*
- * Sensor-side controls. The OV2640's DSP may implement edge enhancement and
- * noise reduction in hardware — free compared with doing either in software,
- * and aimed exactly at the two things still wrong with our photos.
- *
- * "May" is the operative word: sensor_t exposes set_sharpness and set_denoise
- * for every sensor, but each driver returns -1 for the ones it does not
- * implement, and esp32-camera ships precompiled so the only way to find out
- * is to ask the chip.
- */
 /* ---------------------------------------------------------------------------
  * Burst.
  *
@@ -368,6 +382,31 @@ static int merge_burst(int got)
     return used;
 }
 
+/*
+ * Blink the LED for the self-timer, accelerating over the final second, then
+ * leave it solid while the shot is taken and processed.
+ *
+ * Blocking, deliberately. A shot already blocks for seven seconds and nothing
+ * else is competing for the loop, so a state machine here would be complexity
+ * bought with no return.
+ */
+static void self_timer(void)
+{
+    if (self_timer_ms == 0) return;
+
+    Serial.printf("self-timer %lu ms...\n", (unsigned long)self_timer_ms);
+
+    const uint32_t t0 = millis();
+    uint32_t elapsed;
+    while ((elapsed = millis() - t0) < self_timer_ms) {
+        const uint32_t left = self_timer_ms - elapsed;
+        const uint32_t half = (left > 1000) ? 250 : 75;   /* 2Hz, then ~6.7Hz */
+        digitalWrite(PIN_LED, ((millis() / half) & 1) ? LED_OFF : LED_ON);
+        delay(5);
+    }
+    digitalWrite(PIN_LED, LED_ON);   /* solid = capturing, hold still */
+}
+
 static void take_photo(void)
 {
     shot_count++;
@@ -390,6 +429,10 @@ static void take_photo(void)
                       cam->set_contrast   && cam->set_contrast(cam, 0) == 0 ? "Y" : "n",
                       cam->set_brightness && cam->set_brightness(cam, 0) == 0 ? "Y" : "n");
     }
+
+    // Countdown first, then start the clock — the timer is not shutter lag
+    // and should not be reported as if it were.
+    self_timer();
 
     const uint32_t t0 = millis();
 
@@ -435,6 +478,8 @@ static void take_photo(void)
                   (unsigned long)(t_done    - t0));
     Serial.printf("free heap %u, free PSRAM %u\n",
                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram());
+
+    digitalWrite(PIN_LED, LED_OFF);
 }
 
 // ---------------------------------------------------------------------------
@@ -444,9 +489,12 @@ void setup(void)
     Serial.begin(115200);
     delay(2000);
 
-    Serial.println("\n=== PaperCam Phase 6 — burst + averaging ===");
+    Serial.println("\n=== PaperCam ===");
     Serial.printf("Build: %s %s\n", __DATE__, __TIME__);
     Serial.printf("Shutter: %s\n", PIN_LABEL);
+
+    pinMode(PIN_LED, OUTPUT);
+    digitalWrite(PIN_LED, LED_OFF);
 
     pinMode(PIN_SHUTTER, INPUT_PULLUP);
     delay(10);
@@ -555,7 +603,7 @@ void setup(void)
     Serial.println("Tone keys (lower = less, upper = more):");
     Serial.println("  s/S sharpen   g/G gamma   c/C contrast   r/R radius");
     Serial.println("  0   sharpening off        ?   show current values");
-    Serial.println("  n/N burst frames (1 = no averaging, direct Phase 5 A/B)");
+    Serial.println("  n/N burst frames (1 = no averaging)   t/T self-timer +/-1s");
     Serial.println("Sensor keys (report UNSUPPORTED if the OV2640 lacks them):");
     Serial.println("  [/] sensor sharpness   ;/' denoise   -/= exposure bias");
 }
@@ -602,6 +650,15 @@ static void handle_key(int c)
 
         /* Burst size. 1 disables averaging entirely, which is the direct A/B
          * against Phase 5 — same pipeline, single frame. */
+        case 't':
+            self_timer_ms = (self_timer_ms >= 1000) ? self_timer_ms - 1000 : 0;
+            Serial.printf("self-timer = %lu ms\n", (unsigned long)self_timer_ms);
+            return;
+        case 'T':
+            if (self_timer_ms < 10000) self_timer_ms += 1000;
+            Serial.printf("self-timer = %lu ms\n", (unsigned long)self_timer_ms);
+            return;
+
         case 'n':
             if (burst_n > 1) burst_n--;
             Serial.printf("burst = %d frames\n", burst_n);
