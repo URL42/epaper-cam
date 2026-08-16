@@ -69,6 +69,32 @@ void dither_fs(const uint8_t *src, uint8_t *out, int16_t *scratch);
 #define DITHER_GRAY4_ROW_BYTES (DITHER_OUT_W / 2)                     /*    400 */
 #define DITHER_GRAY4_BYTES (DITHER_GRAY4_ROW_BYTES * DITHER_OUT_H)    /* 192,000 */
 
+/*
+ * What the four levels actually look like, measured on the panel.
+ *
+ * NOT 0/85/170/255. The waveform spaces the levels evenly in perceived
+ * lightness (L*), which is not even in luminance, so both midtones sit well
+ * below where naive spacing would put them.
+ *
+ * Measured with PaperCam_GrayCalib, which puts each solid level beside
+ * black/white patches of known ratio and asks which one it disappears into.
+ * Reflectance blends linearly, so the matching ratio *is* the level's value.
+ * Level 1 matched ~22-25%, level 2 ~50-57%; these are the midpoints. That
+ * agrees with what the datasheet implies from white L*=63 and black L*=32.
+ *
+ * This is not cosmetic. Error diffusion subtracts the value it *believes* it
+ * wrote and passes the remainder to the neighbours. Believing 85 while the
+ * panel shows 60 injects 25 of error per pixel that is never accounted for,
+ * so it accumulates as a systematic darkening across three quarters of the
+ * image — and no tone curve can undo it, because the tone curve runs first.
+ *
+ * Re-measure if the panel or the library's LUTs ever change.
+ */
+#define DITHER_GRAY4_L0 0
+#define DITHER_GRAY4_L1 60
+#define DITHER_GRAY4_L2 138
+#define DITHER_GRAY4_L3 255
+
 void dither_fs_gray4(const uint8_t *src, uint8_t *out, int16_t *scratch);
 
 #ifdef __cplusplus

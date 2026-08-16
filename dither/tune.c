@@ -190,16 +190,24 @@ int main(int argc, char **argv)
 
         dither_fs_gray4(img, g4, scratch);
 
-        /* Expand the 2-bit levels back to 0/85/170/255 so the preview shows
-         * what the panel will show. Not what gets sent to hardware — the
-         * device pushes the packed 4bpp buffer straight into the sprite. */
+        /*
+         * Expand the 2-bit levels back to their MEASURED luminances, not to
+         * 0/85/170/255. Every preview before this was lighter than the panel
+         * actually renders, which is why on-panel results kept feeling heavier
+         * than the simulation promised. An honest preview matters more than a
+         * flattering one when it is what tuning decisions are made against.
+         */
+        static const uint8_t LVL[4] = {
+            DITHER_GRAY4_L0, DITHER_GRAY4_L1,
+            DITHER_GRAY4_L2, DITHER_GRAY4_L3
+        };
         uint32_t hist[4] = {0};
         for (int y = 0; y < DITHER_OUT_H; y++) {
             for (int x = 0; x < DITHER_OUT_W; x++) {
                 const uint8_t byte = g4[(size_t)y * DITHER_GRAY4_ROW_BYTES + (size_t)(x >> 1)];
                 const uint8_t lvl  = ((x & 1) == 0) ? (uint8_t)(byte >> 4) : (uint8_t)(byte & 0x0F);
                 hist[lvl & 3]++;
-                vis[(size_t)y * DITHER_OUT_W + (size_t)x] = (uint8_t)((lvl & 3) * 85);
+                vis[(size_t)y * DITHER_OUT_W + (size_t)x] = LVL[lvl & 3];
             }
         }
         write_pgm(out_path, vis, DITHER_OUT_W, DITHER_OUT_H);

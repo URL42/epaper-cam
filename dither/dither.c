@@ -107,12 +107,24 @@ void dither_fs_gray4(const uint8_t *src, uint8_t *out, int16_t *scratch)
             if (old < 0)   old = 0;
             if (old > 255) old = 255;
 
-            /* Nearest of 4 evenly spaced levels. +42 rounds to nearest rather
-             * than flooring, which would bias the whole image dark. */
-            int32_t level = (old + 42) / 85;
-            if (level > 3) level = 3;
+            /*
+             * Nearest of the four *measured* levels, so compare against the
+             * midpoints between them rather than dividing by a constant. The
+             * levels are not evenly spaced — see DITHER_GRAY4_L* in dither.h.
+             */
+            static const int16_t LEVEL[4] = {
+                DITHER_GRAY4_L0, DITHER_GRAY4_L1,
+                DITHER_GRAY4_L2, DITHER_GRAY4_L3
+            };
+            int32_t level;
+            if      (old < (DITHER_GRAY4_L0 + DITHER_GRAY4_L1) / 2) level = 0;
+            else if (old < (DITHER_GRAY4_L1 + DITHER_GRAY4_L2) / 2) level = 1;
+            else if (old < (DITHER_GRAY4_L2 + DITHER_GRAY4_L3) / 2) level = 2;
+            else                                                    level = 3;
 
-            const int32_t e = old - level * 85;
+            /* The error is against what the panel will really show, which is
+             * the whole point of measuring. */
+            const int32_t e = old - LEVEL[level];
 
             /* High nibble is the even-x pixel, matching the sprite layout
              * initGrayMode(GRAY_LEVEL4) sets up. */
