@@ -1,7 +1,12 @@
 # PaperCam
 
 An e-paper camera. Press the shutter, wait three seconds, and a photograph
-appears on a 7.5" e-paper panel and stays there with no power at all.
+appears on a 7.5" e-paper panel and stays there with no power at all — through
+deep sleep, through a battery swap, indefinitely.
+
+Tap to shoot. Hold to upload the last photo over WiFi. It sleeps after five
+idle minutes and wakes when you press the button, with the picture still on
+the glass.
 
 Built on a Seeed XIAO ESP32S3 Sense and a 7.5" 800×480 UC8179 panel. The
 interesting part is that the panel is sold as black-and-white, and this drives
@@ -20,7 +25,7 @@ photograph and a stippled mess.
 ## How it works
 
 ```
-shutter → 3s self-timer (LED countdown)
+tap     → 3s self-timer (LED countdown)
         → burst of 6 frames, SVGA greyscale
         → score each by variance of Laplacian, drop the shaken ones
         → average the survivors            (noise ÷ √N)
@@ -28,9 +33,19 @@ shutter → 3s self-timer (LED countdown)
         → Floyd-Steinberg, serpentine, to 4-level grey
         → straight into the panel's sprite buffer
         → refresh                           (~5.1s)
+        → JPEG to flash                     (~40KB, survives deep sleep)
+
+hold    → wifi up → POST the last JPEG → wifi off
+idle 5m → deep sleep, panel keeps its image, wake on the shutter
 ```
 
 About 7.7 seconds shutter to image, of which 5.1 is the panel itself.
+
+WiFi is off unless you ask for it. Idle WiFi is what drains a battery; a
+connect-send-disconnect cycle costs roughly 0.15 mAh, so uploading is
+affordable and never happens behind your back. Because it is a deliberate
+gesture there is no retry queue and no silent failure — if it fails, hold
+again. Nothing about uploading can stop the camera taking photographs.
 
 The dither and tone modules are plain C11 with no Arduino dependencies, so
 they build natively on a host as well as inside the sketch. `dither/` has a
@@ -94,7 +109,7 @@ installed from a ZIP. It conflicts with TFT_eSPI; only one may be present.
 PaperCam/    the camera
 bench/       FocusAssist  GrayCalib  GrayTest  ImageTest  FrameDump
 dither/      dither + tone modules, native harness, tone playground
-tools/       recv_frame.py, make_testchart.py
+tools/       recv_frame.py, recv_upload.py, make_testchart.py
 ```
 
 Arduino only compiles sources inside a sketch folder, so `PaperCam/src/`
@@ -118,19 +133,51 @@ Serial at 115200, one character at a time:
 | `n`/`N` burst frames | `g`/`G` gamma · `c`/`C` contrast |
 | `s`/`S` software sharpen · `0` off | `[`/`]` sensor sharpness |
 | `;`/`'` sensor denoise | `-`/`=` exposure bias |
+| `j` show the stored JPEG · `u` upload now | `z` sleep now |
 
 Tone has no correct answer, only a preferred one, and a 40-second reflash per
 guess is the wrong feedback loop for a judgement call.
 
+## Uploading
+
+Hold the shutter and the camera joins WiFi, POSTs `/last.jpg`, and switches the
+radio off again.
+
+Credentials go in `PaperCam/secrets.h` — copy `secrets.h.example` and fill it
+in. It is gitignored. The sketch builds fine without it; upload is simply
+disabled and a hold says so.
+
+The intended target is an n8n webhook, which then writes to Google Drive or
+wherever else. That split is deliberate: n8n holds the OAuth credential so the
+microcontroller never has to. Token refresh, expiry, clock skew and certificate
+storage on an ESP32 are all miserable, and changing destination later becomes
+one line in `secrets.h` rather than a firmware change.
+
+`tools/recv_upload.py` is a stdlib HTTP endpoint for testing before any of that
+exists, so test photos stay on your own network. It verifies the JPEG's
+FFD8/FFD9 markers, because a truncated upload otherwise looks like success at
+both ends.
+
 ## Status
 
-Working: panel, camera, focus, greyscale, level calibration, tone, burst
-averaging, self-timer.
+Working: everything the camera is for. Panel, focus, 4-level greyscale with
+measured levels, tone, burst averaging, self-timer, tap-and-hold, JPEG to
+flash, WiFi upload, deep sleep with the image preserved across wake.
 
-Not done: deep sleep and battery operation, and an enclosure. The panel is
-already ruled out as the power problem — 100 mAs a refresh and 7 µA asleep, so
-a 1000mAh cell covers roughly 36,000 refreshes. The open question is the Sense
-board's sleep current with the camera attached.
+Not done: an enclosure, and battery operation.
+
+The panel is already ruled out as the power problem — 100 mAs a refresh and
+7 µA asleep, so a 1000mAh cell covers roughly 36,000 refreshes. The open
+question is the Sense board's sleep current, and it is not a small one:
+`PWDN_GPIO_NUM` is -1 on this hardware, so the camera's power-down pin is not
+wired to the ESP32 and software cannot cut its power. `esp_camera_deinit()`
+stops the clock and that is all it can do. At a reported ~3mA a 1000mAh cell
+lasts about a fortnight, which makes idle draw rather than photography the
+entire battery design. Gating that supply with a MOSFET is the known fix.
+
+Sleep current is unmeasured — nothing here resolves microamps — so the battery
+will answer it: a fortnight means ~3mA, a couple of months means we got away
+with it.
 
 Also unresolved: capture runs at ~355ms a frame and it is not clear why, and
 whether capturing above SVGA and downsampling in software beats the sensor's
