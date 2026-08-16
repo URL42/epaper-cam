@@ -28,6 +28,8 @@
 
 #include "TFT_eSPI.h"
 #include "esp_camera.h"
+#include "img_converters.h"   // fmt2jpg, ships with esp32-camera
+#include <LittleFS.h>
 #include "src/dither.h"
 #include "src/tone.h"
 
@@ -436,6 +438,66 @@ static void self_timer(void)
     digitalWrite(PIN_LED, LED_ON);   /* solid = capturing, hold still */
 }
 
+/* ---------------------------------------------------------------------------
+ * Saving the last photo.
+ *
+ * One file, overwritten each shot, on the SPIFFS partition the 8M-with-spiffs
+ * scheme already gives us. Flash rather than PSRAM because it has to survive
+ * deep sleep — a photo you cannot upload after the device naps is not much of
+ * an archive. A single ~60KB file rewritten a few times a day will not
+ * meaningfully wear the flash in this decade.
+ *
+ * Encoded from the CROPPED, TONE-MAPPED frame, so the JPEG is exactly what the
+ * panel shows minus the dithering. The alternative — the untoned negative —
+ * would be the better choice for reprocessing a corpus later, but these are
+ * meant to be looked at, and the tone curve is nearly neutral now anyway.
+ * Switch the pointer below if that preference ever flips.
+ * ------------------------------------------------------------------------ */
+
+static constexpr char JPEG_PATH[]    = "/last.jpg";
+static constexpr uint8_t JPEG_QUALITY = 85;
+
+static size_t last_jpeg_bytes = 0;
+
+static bool save_jpeg(const uint8_t *toned)
+{
+    // Rows are contiguous, so skipping to the first kept row and asking for
+    // 480 of them frames it exactly as the panel does — no copy needed.
+    const uint8_t *cropped = toned + (size_t)DITHER_CROP_TOP * DITHER_SRC_W;
+
+    uint8_t *jpg = nullptr;
+    size_t   len = 0;
+
+    if (!fmt2jpg((uint8_t *)cropped,
+                 (size_t)DITHER_OUT_W * DITHER_OUT_H,
+                 DITHER_OUT_W, DITHER_OUT_H,
+                 PIXFORMAT_GRAYSCALE, JPEG_QUALITY, &jpg, &len)) {
+        Serial.println("  jpeg encode FAILED");
+        return false;
+    }
+
+    // fs::File, not File: Seeed GFX inherits TFT_eSPI's FS_NO_GLOBALS, which
+    // suppresses the `using fs::File` that would normally make it global.
+    fs::File f = LittleFS.open(JPEG_PATH, "w");
+    if (!f) {
+        Serial.printf("  could not open %s for writing\n", JPEG_PATH);
+        free(jpg);
+        return false;
+    }
+    const size_t written = f.write(jpg, len);
+    f.close();
+    free(jpg);   // fmt2jpg allocates; the caller owns it
+
+    if (written != len) {
+        Serial.printf("  short write: %u of %u bytes (filesystem full?)\n",
+                      (unsigned)written, (unsigned)len);
+        return false;
+    }
+
+    last_jpeg_bytes = len;
+    return true;
+}
+
 static void take_photo(void)
 {
     shot_count++;
@@ -496,6 +558,11 @@ static void take_photo(void)
     epaper.update();
     const uint32_t t_done = millis();
 
+    // After the refresh, deliberately. The photo is already on the panel by
+    // this point, so encoding and writing costs the viewer nothing.
+    const bool saved = save_jpeg(burst[0]);
+    const uint32_t t_saved = millis();
+
     Serial.printf("burst %d/%d used | capture %lu | merge %lu | tone %lu | "
                   "dither %lu | paint %lu | total %lu ms\n",
                   used, got,
@@ -505,6 +572,11 @@ static void take_photo(void)
                   (unsigned long)(t_dither  - t_tone),
                   (unsigned long)(t_done    - t_dither),
                   (unsigned long)(t_done    - t0));
+    if (saved) {
+        Serial.printf("saved %s: %u bytes in %lu ms\n", JPEG_PATH,
+                      (unsigned)last_jpeg_bytes,
+                      (unsigned long)(t_saved - t_done));
+    }
     Serial.printf("free heap %u, free PSRAM %u\n",
                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getFreePsram());
 
@@ -584,6 +656,15 @@ void setup(void)
                       cam->set_brightness && cam->set_brightness(cam, 0) == 0 ? "YES" : "no");
     }
 
+    // format-on-failure: a fresh board has no filesystem, and there is nothing
+    // on it worth preserving over a working camera.
+    if (!LittleFS.begin(true)) {
+        Serial.println("LittleFS mount FAILED — photos will not be saved");
+    } else {
+        Serial.printf("LittleFS: %u of %u bytes used\n",
+                      (unsigned)LittleFS.usedBytes(), (unsigned)LittleFS.totalBytes());
+    }
+
     tone_build_lut(&tone_cfg, tone_lut);
 
     /*
@@ -633,7 +714,8 @@ void setup(void)
     Serial.println("  s/S sharpen   g/G gamma   c/C contrast   r/R radius");
     Serial.println("  0   sharpening off        ?   show current values");
     Serial.println("  n/N burst frames (1 = no averaging)   t/T self-timer +/-1s");
-    Serial.println("Sensor keys (report UNSUPPORTED if the OV2640 lacks them):");
+    Serial.println("  j   show the stored JPEG");
+    Serial.println("Sensor keys (OV3660 supports all of these):");
     Serial.println("  [/] sensor sharpness   ;/' denoise   -/= exposure bias");
 }
 
@@ -696,6 +778,16 @@ static void handle_key(int c)
 
         /* Burst size. 1 disables averaging entirely, which is the direct A/B
          * against Phase 5 — same pipeline, single frame. */
+        case 'j': {
+            fs::File f = LittleFS.open(JPEG_PATH, "r");
+            if (!f) { Serial.printf("%s: not present\n", JPEG_PATH); return; }
+            Serial.printf("%s: %u bytes  (fs %u/%u used)\n", JPEG_PATH,
+                          (unsigned)f.size(), (unsigned)LittleFS.usedBytes(),
+                          (unsigned)LittleFS.totalBytes());
+            f.close();
+            return;
+        }
+
         case 't':
             self_timer_ms = (self_timer_ms >= 1000) ? self_timer_ms - 1000 : 0;
             Serial.printf("self-timer = %lu ms\n", (unsigned long)self_timer_ms);
