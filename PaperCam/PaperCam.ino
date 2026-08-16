@@ -23,7 +23,9 @@
  * frame scoring well below the best in the burst is dropped rather than
  * blended in.
  *
- * No deep sleep. That is Phase 7.
+ * Sleeps after five idle minutes and wakes on the shutter. The panel holds its
+ * image throughout, drawing nothing — which is the whole reason for using
+ * e-paper rather than a screen.
  */
 
 #include "TFT_eSPI.h"
@@ -32,6 +34,8 @@
 #include <LittleFS.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
 #include "src/dither.h"
 #include "src/tone.h"
 
@@ -80,7 +84,7 @@ static constexpr uint32_t DEBOUNCE_MS = 25;
  * Tap versus hold.
  *
  * Tap  (release before HOLD_MS) — take a photo.
- * Hold (still down at HOLD_MS)  — upload the last photo. Not wired up yet.
+ * Hold (still down at HOLD_MS)  — upload the last photo over WiFi.
  *
  * The trigger moves from the press edge to the release, which normally costs
  * responsiveness. Here it costs nothing: the self-timer already imposes three
@@ -114,6 +118,39 @@ static constexpr uint8_t  LED_OFF  = HIGH;
 static constexpr uint32_t SELF_TIMER_DEFAULT_MS = 3000;
 
 static uint32_t self_timer_ms = SELF_TIMER_DEFAULT_MS;
+
+/* ---------------------------------------------------------------------------
+ * Deep sleep.
+ *
+ * Sleep after five idle minutes, wake on the shutter going low (EXT0). Waking
+ * does NOT take a photo — one press wakes, the next shoots. Wake-and-shoot
+ * would be one press fewer, but there are two gestures on this button now and
+ * a wake that always fires the shutter makes hold-to-upload unreachable from
+ * sleep.
+ *
+ * The panel keeps its image throughout, which is the entire premise of the
+ * project. Nothing here may call epaper.update() — drawing into the sprite is
+ * free, but pushing it would blank the photograph we are sleeping to preserve.
+ *
+ * On the pullup: D5's internal pullup stops holding once the pad moves to the
+ * RTC domain, so rtc_gpio_pullup_en() plus a pad hold takes over. The RTC
+ * pullup is weaker than a discrete resistor (~45k), so on long button leads it
+ * is more prone to noise. The symptom would be the board waking on its own
+ * with nobody near it; the cure is a 10k from D5 to 3V3.
+ *
+ * On current: PWDN_GPIO_NUM is -1 on this board, meaning the camera's
+ * power-down pin is not wired to the ESP32 at all. Software therefore cannot
+ * cut power to the sensor. esp_camera_deinit() stops the XCLK, which helps,
+ * but the Sense's camera board is widely reported to keep drawing milliamps
+ * regardless — and at 3mA a 1000mAh cell lasts about a fortnight, so idle
+ * draw, not photography, is what sets battery life. The known fix is gating
+ * the camera board's supply with a MOSFET. Measure before building that.
+ * ------------------------------------------------------------------------ */
+
+static constexpr uint32_t SLEEP_AFTER_MS = 5UL * 60UL * 1000UL;
+static constexpr gpio_num_t WAKE_GPIO    = GPIO_NUM_6;   /* D5 */
+
+static uint32_t last_activity_ms = 0;
 
 // ---------------------------------------------------------------------------
 // Camera pins — XIAO ESP32S3 Sense, from the core's camera_pins.h.
@@ -607,6 +644,29 @@ void setup(void)
     Serial.printf("Build: %s %s\n", __DATE__, __TIME__);
     Serial.printf("Shutter: %s\n", PIN_LABEL);
 
+    /*
+     * Why we are awake. A press-triggered wake is the normal path; POWERON
+     * means the battery was just connected or it reset. Worth printing because
+     * an unexplained POWERON after a sleep means something crashed, and an
+     * EXT0 wake with nobody touching the button means the RTC pullup is losing
+     * to noise on the button leads.
+     */
+    switch (esp_sleep_get_wakeup_cause()) {
+        case ESP_SLEEP_WAKEUP_EXT0:
+            Serial.println("woke: shutter pressed");
+            break;
+        case ESP_SLEEP_WAKEUP_UNDEFINED:
+            Serial.println("woke: power-on or reset (not from sleep)");
+            break;
+        default:
+            Serial.printf("woke: cause %d\n", (int)esp_sleep_get_wakeup_cause());
+            break;
+    }
+
+    // The pad was held through sleep; release it or the pin stays frozen and
+    // the button reads as permanently pressed.
+    rtc_gpio_hold_dis(WAKE_GPIO);
+
     pinMode(PIN_LED, OUTPUT);
     digitalWrite(PIN_LED, LED_OFF);
 
@@ -727,9 +787,13 @@ void setup(void)
     Serial.println("  s/S sharpen   g/G gamma   c/C contrast   r/R radius");
     Serial.println("  0   sharpening off        ?   show current values");
     Serial.println("  n/N burst frames (1 = no averaging)   t/T self-timer +/-1s");
-    Serial.println("  j   show the stored JPEG    u   upload it now");
+    Serial.println("  j   show the stored JPEG    u   upload it now    z   sleep now");
     Serial.println("Sensor keys (OV3660 supports all of these):");
     Serial.println("  [/] sensor sharpness   ;/' denoise   -/= exposure bias");
+    Serial.printf("Sleeping after %lu minutes idle.\n",
+                  (unsigned long)(SLEEP_AFTER_MS / 60000UL));
+
+    last_activity_ms = millis();
 }
 
 /* ---------------------------------------------------------------------------
@@ -860,6 +924,34 @@ static void on_hold(void)
 #endif
 }
 
+static void go_to_sleep(const char *why)
+{
+    Serial.printf("\nsleeping (%s). Press the shutter to wake.\n", why);
+
+    // Two slow pulses so it is obvious the device chose to sleep rather than
+    // crashed or lost power.
+    led_flash(2, 250);
+    digitalWrite(PIN_LED, LED_OFF);
+
+    // Stops the XCLK and releases the sensor's pins. Cannot cut its power —
+    // PWDN is not wired on this board — but it is the most we can do in
+    // software and it is measurably better than leaving the clock running.
+    esp_camera_deinit();
+
+    // The internal pullup does not survive the pad moving to the RTC domain,
+    // so enable the RTC one and hold the pad through sleep. Without this the
+    // pin floats and the board wakes on noise.
+    rtc_gpio_pullup_en(WAKE_GPIO);
+    rtc_gpio_pulldown_dis(WAKE_GPIO);
+
+    // Wake when the shutter pulls the pin LOW.
+    esp_sleep_enable_ext0_wakeup(WAKE_GPIO, 0);
+
+    Serial.flush();
+    esp_deep_sleep_start();
+    // Never returns. Waking is a fresh boot through setup().
+}
+
 static void print_tone(void)
 {
     Serial.printf("tone: black=%u gamma=%.2f contrast=%.2f sharp=%.2f radius=%d\n",
@@ -903,6 +995,7 @@ static void handle_key(int c)
         /* Burst size. 1 disables averaging entirely, which is the direct A/B
          * against Phase 5 — same pipeline, single frame. */
         case 'u': on_hold(); return;
+        case 'z': go_to_sleep("asked"); return;   // never returns
 
         case 'j': {
             fs::File f = LittleFS.open(JPEG_PATH, "r");
@@ -989,6 +1082,11 @@ void loop(void)
 {
     if (Serial.available()) {
         handle_key(Serial.read());
+        last_activity_ms = millis();
+    }
+
+    if (millis() - last_activity_ms >= SLEEP_AFTER_MS) {
+        go_to_sleep("idle");
     }
 
     const uint32_t now = millis();
@@ -1005,8 +1103,9 @@ void loop(void)
         if (stable_pressed) {
             // Press: start the clock, commit to nothing. Whether this is a tap
             // or a hold is not knowable yet.
-            press_started = now;
-            hold_fired    = false;
+            press_started    = now;
+            hold_fired       = false;
+            last_activity_ms = now;
         } else if (!hold_fired) {
             // Released before the hold threshold, so it was a tap. If hold
             // already fired we stay quiet: one physical press, one action.
