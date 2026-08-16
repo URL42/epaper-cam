@@ -105,6 +105,21 @@ static uint8_t  tone_lut[256];
 static uint8_t *tone_a = nullptr;
 static uint8_t *tone_b = nullptr;
 
+/*
+ * Sensor-side controls. The OV2640's DSP may implement edge enhancement and
+ * noise reduction in hardware — free compared with doing either in software,
+ * and aimed exactly at the two things still wrong with our photos.
+ *
+ * "May" is the operative word: sensor_t exposes set_sharpness and set_denoise
+ * for every sensor, but each driver returns -1 for the ones it does not
+ * implement, and esp32-camera ships precompiled so the only way to find out
+ * is to ask the chip.
+ */
+static sensor_t *cam = nullptr;
+static int cam_sharpness = 0;
+static int cam_denoise   = 0;
+static int cam_ae_level  = 0;
+
 static bool     raw_pressed     = false;
 static bool     stable_pressed  = false;
 static uint32_t last_raw_change = 0;
@@ -290,6 +305,27 @@ void setup(void)
     Serial.println("OK");
     Serial.printf("free PSRAM after init: %u\n", (unsigned)ESP.getFreePsram());
 
+    /*
+     * Probe what this sensor actually implements. Each setter returns 0 on
+     * success and -1 when the driver has no implementation for it, so calling
+     * with a harmless value is a direct capability test.
+     */
+    cam = esp_camera_sensor_get();
+    if (cam) {
+        Serial.printf("sensor PID 0x%04x\n", cam->id.PID);
+        Serial.println("control support:");
+        Serial.printf("  sharpness  %s\n",
+                      cam->set_sharpness && cam->set_sharpness(cam, 0) == 0 ? "YES" : "no");
+        Serial.printf("  denoise    %s\n",
+                      cam->set_denoise && cam->set_denoise(cam, 0) == 0 ? "YES" : "no");
+        Serial.printf("  ae_level   %s\n",
+                      cam->set_ae_level && cam->set_ae_level(cam, 0) == 0 ? "YES" : "no");
+        Serial.printf("  contrast   %s\n",
+                      cam->set_contrast && cam->set_contrast(cam, 0) == 0 ? "YES" : "no");
+        Serial.printf("  brightness %s\n",
+                      cam->set_brightness && cam->set_brightness(cam, 0) == 0 ? "YES" : "no");
+    }
+
     tone_build_lut(&tone_cfg, tone_lut);
     tone_a = (uint8_t *)ps_malloc((size_t)DITHER_SRC_W * DITHER_SRC_H);
     tone_b = (uint8_t *)ps_malloc((size_t)DITHER_SRC_W * DITHER_SRC_H);
@@ -312,6 +348,8 @@ void setup(void)
     Serial.println("Tone keys (lower = less, upper = more):");
     Serial.println("  s/S sharpen   g/G gamma   c/C contrast   r/R radius");
     Serial.println("  0   sharpening off        ?   show current values");
+    Serial.println("Sensor keys (report UNSUPPORTED if the OV2640 lacks them):");
+    Serial.println("  [/] sensor sharpness   ;/' denoise   -/= exposure bias");
 }
 
 static void print_tone(void)
@@ -319,6 +357,20 @@ static void print_tone(void)
     Serial.printf("tone: black=%u gamma=%.2f contrast=%.2f sharp=%.2f radius=%d\n",
                   tone_cfg.black, (double)tone_cfg.gamma, (double)tone_cfg.contrast,
                   (double)tone_cfg.sharp_amt, tone_cfg.sharp_rad);
+
+    // Repeated on demand rather than only at boot. Anything printed during
+    // setup scrolls off behind the first few shots, and this is the report
+    // that decides whether the OV2640 can help us at all.
+    if (!cam) { Serial.println("sensor: no handle"); return; }
+    Serial.printf("sensor 0x%04x  sharpness=%d denoise=%d ae_level=%d\n",
+                  cam->id.PID, cam_sharpness, cam_denoise, cam_ae_level);
+    Serial.printf("  supports: sharpness %s | denoise %s | ae_level %s | "
+                  "contrast %s | brightness %s\n",
+                  cam->set_sharpness  && cam->set_sharpness(cam, cam_sharpness) == 0 ? "Y" : "n",
+                  cam->set_denoise    && cam->set_denoise(cam, cam_denoise) == 0 ? "Y" : "n",
+                  cam->set_ae_level   && cam->set_ae_level(cam, cam_ae_level) == 0 ? "Y" : "n",
+                  cam->set_contrast   && cam->set_contrast(cam, 0) == 0 ? "Y" : "n",
+                  cam->set_brightness && cam->set_brightness(cam, 0) == 0 ? "Y" : "n");
 }
 
 /*
@@ -339,6 +391,48 @@ static void handle_key(int c)
         case '0': tone_cfg.sharp_amt  = 0.0f; break;   // sharpening fully off
         case 'x': take_photo();  return;
         case '?': print_tone();  return;
+
+        /* Sensor-side controls. Reports the driver's return value so an
+         * unsupported control says so rather than silently doing nothing. */
+        case '[': case ']': case ';': case '\'': case '-': case '=': {
+            if (!cam) { Serial.println("no sensor handle"); return; }
+            int rc = -1;
+            const char *what = "";
+            switch (c) {
+                case '[': cam_sharpness--; goto set_sharp;
+                case ']': cam_sharpness++;
+                set_sharp:
+                    if (cam_sharpness < -3) cam_sharpness = -3;
+                    if (cam_sharpness >  3) cam_sharpness =  3;
+                    what = "sharpness";
+                    rc = cam->set_sharpness ? cam->set_sharpness(cam, cam_sharpness) : -1;
+                    Serial.printf("%s = %d  (rc %d%s)\n", what, cam_sharpness, rc,
+                                  rc ? ", UNSUPPORTED" : "");
+                    return;
+                case ';': cam_denoise--; goto set_denoise;
+                case '\'': cam_denoise++;
+                set_denoise:
+                    if (cam_denoise < 0) cam_denoise = 0;
+                    if (cam_denoise > 8) cam_denoise = 8;
+                    what = "denoise";
+                    rc = cam->set_denoise ? cam->set_denoise(cam, cam_denoise) : -1;
+                    Serial.printf("%s = %d  (rc %d%s)\n", what, cam_denoise, rc,
+                                  rc ? ", UNSUPPORTED" : "");
+                    return;
+                case '-': cam_ae_level--; goto set_ae;
+                case '=': cam_ae_level++;
+                set_ae:
+                    if (cam_ae_level < -2) cam_ae_level = -2;
+                    if (cam_ae_level >  2) cam_ae_level =  2;
+                    what = "ae_level";
+                    rc = cam->set_ae_level ? cam->set_ae_level(cam, cam_ae_level) : -1;
+                    Serial.printf("%s = %d  (rc %d%s)\n", what, cam_ae_level, rc,
+                                  rc ? ", UNSUPPORTED" : "");
+                    return;
+            }
+            return;
+        }
+
         default:                 return;
     }
 

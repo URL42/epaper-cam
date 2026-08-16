@@ -36,6 +36,14 @@ typedef struct {
  * crushed the backlit portrait to a silhouette; contrast above ~1.3 buys
  * punch by throwing away tonal range.
  *
+ * Gamma is 1.0 — no lift at all — and that is a consequence of measuring the
+ * grey levels. The 1.35 lift this replaces was tuned while dither_fs_gray4
+ * still assumed levels of 0/85/170/255, so it was quietly compensating for a
+ * darkening the ditherer did not know it was causing. Fixing the level table
+ * turned that compensation into double-counting and every shot came out
+ * washed. With a correct level table the pipeline wants to be tonally
+ * neutral. Drop toward 0.9 for a punchier, contrastier look.
+ *
  * Sharpening is OFF, and that is a bench result rather than an oversight. At
  * 1-bit the unsharp mask was the main thing making edges read, and 0.9 was
  * worth its cost. Moving to 4-level grey made it invisible — a side-by-side
@@ -44,7 +52,7 @@ typedef struct {
  * through PSRAM. The levels now do the work the mask used to. Raising this
  * above zero reintroduces that 863ms, so measure before you do.
  */
-#define TONE_DEFAULTS { 8, 255, 1.35f, 1.20f, 0.00f, 3 }
+#define TONE_DEFAULTS { 8, 255, 1.00f, 1.20f, 0.00f, 3 }
 
 /*
  * All the global tone maths collapses into one 256-entry table, so the
