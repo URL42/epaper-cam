@@ -15,7 +15,7 @@ were measured on the bench, with the phase that measured them.
 
 | Part | Notes |
 |---|---|
-| Seeed XIAO ESP32S3 **Sense** | OV2640 camera, 8MB PSRAM, 8MB flash |
+| Seeed XIAO ESP32S3 **Sense** | **OV3660** camera (see below — not OV2640), 8MB PSRAM, 8MB flash |
 | Seeed **ePaper Driver Board** (SKU 114993558) | JST BAT connector, charging IC, power switch, 24-pin FPC |
 | Seeed 7.5" Monochrome ePaper, 800x480 (SKU p-5788) | Panel **T075A04**, UC8179 controller. Sold as B/W; does 4-level grey — see below |
 | LiPo cell w/ JST 2.0mm | into the Driver Board's BAT connector |
@@ -64,9 +64,41 @@ D4 (GPIO5), D5 (GPIO6), D6 (GPIO43), D7 (GPIO44), D9 (GPIO8)
 
 ### Camera
 
-The OV2640 connects through the board-to-board connector on the underside of
-the XIAO itself, not the castellated pads. It uses internal GPIOs (10, 13-18,
-38-48) and does **not** collide with any panel pin. No wiring required.
+Connects through the board-to-board connector on the underside of the XIAO
+itself, not the castellated pads. Uses internal GPIOs (10-18, 38-40, 47-48)
+and does **not** collide with any panel pin. No wiring required. Pin map is in
+the core's `camera_pins.h` under `CAMERA_MODEL_XIAO_ESP32S3`.
+
+**CORRECTED (Phase 6): this board has an OV3660, not an OV2640.** Sensor PID
+reads `0x3660`. Newer Sense batches ship the 3MP OV3660 in place of the 2MP
+OV2640, and nothing in the listing or the wiki says so. This document asserted
+OV2640 for six phases and it shaped several wrong conclusions.
+
+It matters because of what the drivers implement. Probed at runtime — the only
+reliable way, since esp32-camera ships precompiled:
+
+| control | OV3660 (ours) |
+|---|---|
+| `set_sharpness` | **YES** |
+| `set_denoise` | **YES** |
+| `set_ae_level` | YES |
+| `set_contrast` | YES |
+| `set_brightness` | YES |
+
+The OV2640 driver implements almost none of these. On the assumption of an
+OV2640, the softness in our photos looked like a hardware ceiling; in fact
+there was on-sensor edge enhancement and noise reduction sitting unused.
+
+**Bench-chosen defaults: sharpness 3, denoise 5, ae_level 0.** Sharpness 3 is
+the driver's ceiling. Note the sharpness metric rose 200 to 341 with it, but
+that is not independent proof — edge enhancement raises variance-of-Laplacian
+by construction. The visual comparison made the call. Exposure bias was tried
+and made things worse.
+
+**Native array is 2048x1536, not 1600x1200.** This retroactively invalidates
+the Phase 5 scaler test, which concluded UXGA-plus-software-downsample was 10%
+worse than SVGA-native: UXGA was already a downscale from the real array, so
+the test did not measure what it claimed to. Unresolved, worth redoing.
 
 ---
 
@@ -160,8 +192,17 @@ uploads without error — blank panel, nothing to debug. Always include:
   stays local, and the texture largely disappears.
 
 - No partial refresh planned.
-- OV2640 supports `PIXFORMAT_GRAYSCALE` natively — no JPEG decode, no
+- The sensor supports `PIXFORMAT_GRAYSCALE` natively — no JPEG decode, no
   RGB-to-luma step. The sensor hands over exactly what the dither needs.
+
+- **`fb_count = 1` means one frame of latency, and it is bigger than it
+  sounds.** With `GRAB_WHEN_EMPTY` the driver keeps a frame buffered, so
+  `esp_camera_fb_get()` returns instantly — Phase 5's `capture 0 ms` was not a
+  fast capture, it was no capture at all. That buffered frame was filled at
+  the *start of the previous panel refresh*, so every Phase 5 photo showed a
+  scene from roughly five seconds before the shutter. Invisible while the
+  scene was static; obvious the moment a burst made it show the previous shot.
+  **Always discard one frame before capturing anything you intend to keep.**
   **CONFIRMED (Phase 3):** `FRAMESIZE_SVGA` + `PIXFORMAT_GRAYSCALE` returns
   exactly 800x600 at 480,000 bytes, one byte per pixel.
 - **Aspect ratio mismatch.** SVGA capture is 800x600 (4:3), panel is 800x480
