@@ -105,7 +105,12 @@ outer_w = panel_w + 2*clear + 2*wall;
 outer_h = panel_h + bezel_top + bezel_bottom;
 outer_z = bezel_t + panel_t + inner_depth;
 
-cam_cx = outer_w/2;
+// Shifted toward the button side rather than sitting top-centre. The panel's
+// FPC leaves the middle of the top edge and has to fold back into the case, so
+// the centre of the top band belongs to the ribbon, not the lens.
+cam_offset_x = 20;
+
+cam_cx = outer_w/2 + cam_offset_x;
 cam_cy = outer_h - bezel_top/2;
 btn_x  = outer_w - bezel_side - 12;
 
