@@ -26,3 +26,6 @@ bench/ImageTest/image_data.h
 
 # WiFi credentials and the upload endpoint. The repo is public.
 PaperCam/secrets.h
+
+# Generated from the .scad by OpenSCAD.
+case/*.stl
