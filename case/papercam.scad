@@ -32,7 +32,8 @@
 //   panel outline / active area   T075A04 datasheet, trustworthy
 //   board 41.3 x 25.4             measured; an unsourced spec says 41 x 22
 //   board hole positions          measured
-//   panel_active_y_offset         UNKNOWN — assumed centred. test_fit settles it.
+//   panel borders                 MEASURED: 3mm plain edges, 10.28mm FPC edge.
+//                                 The active area is not centred in the glass.
 // ---------------------------------------------------------------------------
 
 part     = "both";
@@ -42,7 +43,20 @@ $fn      = 48;
 // --- panel (datasheet) ------------------------------------------------------
 panel_w  = 170.2;  panel_h = 111.2;  panel_t = 1.1;
 active_w = 163.2;  active_h = 97.92;
-panel_active_y_offset = 0;        // +ve moves the window down
+
+// MEASURED, and the active area is NOT centred in the glass. The datasheet
+// gives both outlines and never relates them; 13.28mm of vertical border turns
+// out to be 3mm on the plain long edge and 10.28mm on the FPC edge. Assuming
+// it centred put the window 3.6mm too high.
+//
+// Ribbon at the TOP in landscape, so the fat border is the top one.
+panel_border_side   = (panel_w - active_w) / 2;        // 3.5, equal per datasheet
+panel_border_bottom = 3;                               // measured
+panel_border_top    = panel_h - active_h - panel_border_bottom;   // 10.28
+
+// How far the glass sinks into the shell. Deeper than the glass itself so
+// there is a definite lip to locate against and room for tape behind it.
+panel_rebate_depth  = panel_t + 0.8;
 
 // --- shell ------------------------------------------------------------------
 bezel_side   = 10;
@@ -89,25 +103,31 @@ cam_cx = outer_w/2;
 cam_cy = outer_h - bezel_top/2;
 btn_x  = outer_w - bezel_side - 12;
 
-sx = [wall + boss_d/2 + 1, outer_w/2, outer_w - wall - boss_d/2 - 1];
-sy = [wall + boss_d/2 + 1, outer_h - wall - boss_d/2 - 1];
+// Five, not six. A boss at top-centre landed exactly on the camera, which is
+// also at top-centre — so that one is gone and the top keeps only its corners.
+bx0 = wall + boss_d/2 + 1;
+bx1 = outer_w - wall - boss_d/2 - 1;
+by0 = wall + boss_d/2 + 1;
+by1 = outer_h - wall - boss_d/2 - 1;
+screw_pos = [[bx0, by0], [outer_w/2, by0], [bx1, by0], [bx0, by1], [bx1, by1]];
 
 // ---------------------------------------------------------------------------
 
 module rrect(w, h, r, z) { linear_extrude(z) offset(r=r) offset(r=-r) square([w,h]); }
 
+// Placed from the glass's own borders, not from its centre.
 module window() {
-    translate([(outer_w - active_w)/2,
-               bezel_bottom + (panel_h - active_h)/2 - panel_active_y_offset, -1])
+    translate([(outer_w - panel_w)/2 + panel_border_side,
+               bezel_bottom + panel_border_bottom, -1])
         cube([active_w, active_h, bezel_t + 2]);
 }
 
 // Takes the whole glass, so the border and FPC tail hide behind the bezel.
-// Only panel_t deep: the panel is 1.1mm of glass and wants support across its
-// back, not a deep pocket to rattle in.
+// Slightly deeper than the glass so it drops in against a definite lip with
+// room for tape behind, rather than sitting proud.
 module panel_rebate() {
     translate([(outer_w - panel_w)/2 - clear, bezel_bottom - clear, bezel_t])
-        cube([panel_w + 2*clear, panel_h + 2*clear, panel_t + 0.2]);
+        cube([panel_w + 2*clear, panel_h + 2*clear, panel_rebate_depth]);
 }
 
 // Countersunk from the front so the bezel cannot vignette a wide lens sitting
@@ -131,8 +151,8 @@ module usb_slot() {
 }
 
 module bosses(bore = false) {
-    for (x = sx) for (y = sy)
-        translate([x, y, bezel_t])
+    for (pos = screw_pos)
+        translate([pos[0], pos[1], bezel_t])
             if (bore) translate([0,0,outer_z - bezel_t - insert_z])
                           cylinder(d = insert_d, h = insert_z + 1);
             else      cylinder(d = boss_d, h = outer_z - bezel_t);
@@ -171,8 +191,8 @@ module shell() {
 module back() {
     difference() {
         rrect(outer_w, outer_h, 3, back_t);
-        for (x = sx) for (y = sy)
-            translate([x, y, -1]) {
+        for (pos = screw_pos)
+            translate([pos[0], pos[1], -1]) {
                 cylinder(d = screw_d, h = back_t + 2);
                 translate([0,0,back_t]) cylinder(d1 = screw_d, d2 = screw_d + 2.4, h = 1.3);
             }
@@ -185,6 +205,13 @@ module test_frame() {
         window();
         translate([cam_cx, cam_cy, -1]) cylinder(d = cam_hole_d, h = bezel_t + 2);
         translate([btn_x, cam_cy - 13, -1]) cylinder(d = btn_d, h = bezel_t + 2);
+        // the rebate outline, scribed shallow, so the test frame shows where
+        // the glass will sit relative to the window
+        translate([(outer_w - panel_w)/2 - clear, bezel_bottom - clear, bezel_t - 0.6])
+            difference() {
+                cube([panel_w + 2*clear, panel_h + 2*clear, 1]);
+                translate([1.5, 1.5, -1]) cube([panel_w + 2*clear - 3, panel_h + 2*clear - 3, 3]);
+            }
     }
 }
 
@@ -196,4 +223,6 @@ else if (part == "back")   back();
 else { shell(); translate([outer_w + 10, 0, 0]) back(); }
 
 echo(str("outer ", outer_w, " x ", outer_h, " x ", outer_z + back_t, " mm"));
-echo(str("inner depth ", inner_depth, " mm; screws: ", len(sx)*len(sy)));
+echo(str("inner depth ", inner_depth, " mm; screws: ", len(screw_pos)));
+echo(str("panel borders  side ", panel_border_side, "  bottom ",
+         panel_border_bottom, "  top ", panel_border_top));
