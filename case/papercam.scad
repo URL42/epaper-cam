@@ -54,9 +54,15 @@ panel_border_side   = (panel_w - active_w) / 2;        // 3.5, equal per datashe
 panel_border_bottom = 3;                               // measured
 panel_border_top    = panel_h - active_h - panel_border_bottom;   // 10.28
 
-// How far the glass sinks into the shell. Deeper than the glass itself so
-// there is a definite lip to locate against and room for tape behind it.
+// How far the glass sinks into the shell, and how much ledge it lands on.
+//
+// The ledge width matches the panel's own side border, so the shelf sits
+// entirely under the glass margin and never intrudes on the active area.
+// Without it there is no rebate at all: the main cavity is inset only by
+// `wall`, which is LESS than the panel's inset, so a pocket cut to panel size
+// removes nothing the cavity had not already removed.
 panel_rebate_depth  = panel_t + 0.8;
+panel_ledge         = 3.5;
 
 // --- shell ------------------------------------------------------------------
 bezel_side   = 10;
@@ -125,9 +131,17 @@ module window() {
 // Takes the whole glass, so the border and FPC tail hide behind the bezel.
 // Slightly deeper than the glass so it drops in against a definite lip with
 // room for tape behind, rather than sitting proud.
-module panel_rebate() {
+module panel_pocket() {
     translate([(outer_w - panel_w)/2 - clear, bezel_bottom - clear, bezel_t])
         cube([panel_w + 2*clear, panel_h + 2*clear, panel_rebate_depth]);
+}
+
+// A local relief in the top band so the camera can sit against the inside of
+// the front face. The panel pocket stops at the glass, and the stepped cavity
+// behind starts too far back for the module to reach.
+module camera_well() {
+    translate([cam_cx - 11, cam_cy - 11, bezel_t])
+        cube([22, 22, panel_rebate_depth + 0.1]);
 }
 
 // Countersunk from the front so the bezel cannot vignette a wide lens sitting
@@ -140,14 +154,15 @@ module camera_hole() {
 
 module button_hole() {
     translate([btn_x, outer_h + 1, bezel_t + inner_depth/2])
-        rotate([90,0,0]) cylinder(d = btn_d, h = wall + 2);
+        rotate([90,0,0]) cylinder(d = btn_d, h = wall + panel_ledge + 2);
 }
 
 // Right wall, roughly mid-height. Deliberately oversized — the board goes
-// wherever it fits, so this has to accept a range of positions.
+// wherever it fits. Cuts through the ledge as well as the wall, or it would
+// open into 3.5mm of solid plastic.
 module usb_slot() {
-    translate([outer_w - wall - 1, outer_h/2 - usb_w/2, bezel_t + 4])
-        cube([wall + 2, usb_w, usb_h]);
+    translate([outer_w - wall - panel_ledge - 1, outer_h/2 - usb_w/2, bezel_t + 4])
+        cube([wall + panel_ledge + 2, usb_w, usb_h]);
 }
 
 module bosses(bore = false) {
@@ -172,14 +187,21 @@ module shell() {
         union() {
             difference() {
                 rrect(outer_w, outer_h, 3, outer_z);
-                translate([wall, wall, bezel_t])
-                    cube([outer_w - 2*wall, outer_h - 2*wall, outer_z]);
+                // Behind the panel: stepped in, leaving the ledge.
+                translate([wall + panel_ledge, wall + panel_ledge,
+                           bezel_t + panel_rebate_depth])
+                    cube([outer_w - 2*(wall + panel_ledge),
+                          outer_h - 2*(wall + panel_ledge), outer_z]);
+                // The panel's own pocket, full depth of the rebate.
+                panel_pocket();
+                // The camera has to reach the front face, and it lives above
+                // the panel where the pocket does not go.
+                camera_well();
             }
             bosses();
             if (use_board_posts) board_posts();
         }
         window();
-        panel_rebate();
         camera_hole();
         button_hole();
         usb_slot();
