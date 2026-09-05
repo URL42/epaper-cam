@@ -132,8 +132,13 @@ module window() {
 // Slightly deeper than the glass so it drops in against a definite lip with
 // room for tape behind, rather than sitting proud.
 module panel_pocket() {
+    // The +0.1 matters. Without it the pocket's back face lands exactly on the
+    // deep cavity's front face, and two subtracted volumes sharing a coplanar
+    // surface make OpenCSG render a ghost membrane across the window — it
+    // looks precisely like something covering the hole. Always overlap
+    // subtracted solids rather than butting them.
     translate([(outer_w - panel_w)/2 - clear, bezel_bottom - clear, bezel_t])
-        cube([panel_w + 2*clear, panel_h + 2*clear, panel_rebate_depth]);
+        cube([panel_w + 2*clear, panel_h + 2*clear, panel_rebate_depth + 0.1]);
 }
 
 // A local relief in the top band so the camera can sit against the inside of
