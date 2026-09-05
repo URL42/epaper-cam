@@ -802,17 +802,24 @@ void setup(void)
     }
 
     /*
-     * Welcome screen on a cold boot only.
+     * Repaint the panel only when there is nothing worth keeping on it.
      *
-     * Waking runs setup() from the top, so an unconditional show_message here
-     * repaints the panel every time and destroys the photograph the device
-     * just spent five minutes asleep preserving. Error paths above still paint
-     * deliberately — a failure is worth losing the picture over.
+     * Keyed on whether a photo exists, NOT on how we booted. Keying it on
+     * from_sleep was wrong: a cold boot is what happens every time the battery
+     * is disconnected and reconnected, and wiping the picture then defeats the
+     * entire point of a display that holds its image without power.
+     *
+     * /last.jpg is the marker — if a photo has ever been taken, the panel is
+     * assumed to be showing it and is left alone. Error paths above still
+     * paint deliberately; a hardware failure is worth losing the picture over,
+     * because otherwise you stare at an old photo with no idea it is broken.
      */
-    if (!from_sleep) {
-        show_message("PaperCam", "press the shutter");
+    if (LittleFS.exists(JPEG_PATH)) {
+        Serial.printf("%s exists — leaving the panel as it is%s\n", JPEG_PATH,
+                      from_sleep ? " (woke from sleep)" : " (cold boot)");
     } else {
-        Serial.println("woke from sleep — panel left untouched");
+        Serial.println("no photo yet — showing the welcome screen");
+        show_message("PaperCam", "press the shutter");
     }
     Serial.println("\nReady. Press the shutter, or 'x' to shoot.");
     Serial.println("Tone keys (lower = less, upper = more):");
