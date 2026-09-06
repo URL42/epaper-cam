@@ -64,6 +64,11 @@ panel_border_top    = panel_h - active_h - panel_border_bottom;   // 10.28
 panel_rebate_depth  = panel_t + 0.8;
 panel_ledge         = 3.5;
 
+// Clearance around the glass, separate from the general `clear`. 0.4mm made it
+// a fight to seat; 1.5mm a side lets it drop in and still hides behind a
+// 3.5mm bezel overlap. Grows the outer shell by 2.2mm, which is free.
+panel_clear         = 1.5;
+
 // --- shell ------------------------------------------------------------------
 bezel_side   = 10;
 bezel_bottom = 10;
@@ -101,17 +106,28 @@ board_org     = [60, 40];         // where the board's bottom-left corner sits
 post_h        = 4;
 
 // --- derived ----------------------------------------------------------------
-outer_w = panel_w + 2*clear + 2*wall;
+outer_w = panel_w + 2*panel_clear + 2*wall;
 outer_h = panel_h + bezel_top + bezel_bottom;
 outer_z = bezel_t + panel_t + inner_depth;
 
-// Shifted toward the button side rather than sitting top-centre. The panel's
-// FPC leaves the middle of the top edge and has to fold back into the case, so
-// the centre of the top band belongs to the ribbon, not the lens.
-cam_offset_x = 30;
+// Back to centre. The board now sits behind the glass with the camera folded
+// forward beside the ribbon, rather than being pushed aside to clear it.
+cam_offset_x = 0;
+
+// Vertically CENTRED IN THE BAND between the top of the panel pocket and the
+// inner face of the top wall, rather than at half the nominal bezel. Those are
+// not the same: the old figure put the well's top edge 0.4mm PAST the inner
+// wall, which is what made it read as crowded against it.
+pocket_top_y   = bezel_bottom + panel_h + panel_clear;
+inner_top_y    = outer_h - wall;
+cam_band_h     = inner_top_y - pocket_top_y;
 
 cam_cx = outer_w/2 + cam_offset_x;
-cam_cy = outer_h - bezel_top/2;
+cam_cy = (pocket_top_y + inner_top_y) / 2;
+
+// 16mm, not 22. The well only has to clear the 6.35mm module plus tape, and at
+// 22 it did not fit the band at all.
+cam_well_w = 16;
 btn_x  = outer_w - bezel_side - 12;
 
 // Five, not six. A boss at top-centre landed exactly on the camera, which is
@@ -142,16 +158,17 @@ module panel_pocket() {
     // surface make OpenCSG render a ghost membrane across the window — it
     // looks precisely like something covering the hole. Always overlap
     // subtracted solids rather than butting them.
-    translate([(outer_w - panel_w)/2 - clear, bezel_bottom - clear, bezel_t])
-        cube([panel_w + 2*clear, panel_h + 2*clear, panel_rebate_depth + 0.1]);
+    translate([(outer_w - panel_w)/2 - panel_clear, bezel_bottom - panel_clear, bezel_t])
+        cube([panel_w + 2*panel_clear, panel_h + 2*panel_clear,
+              panel_rebate_depth + 0.1]);
 }
 
 // A local relief in the top band so the camera can sit against the inside of
 // the front face. The panel pocket stops at the glass, and the stepped cavity
 // behind starts too far back for the module to reach.
 module camera_well() {
-    translate([cam_cx - 11, cam_cy - 11, bezel_t])
-        cube([22, 22, panel_rebate_depth + 0.1]);
+    translate([cam_cx - cam_well_w/2, cam_cy - cam_well_w/2, bezel_t])
+        cube([cam_well_w, cam_well_w, panel_rebate_depth + 0.1]);
 }
 
 // Countersunk from the front so the bezel cannot vignette a wide lens sitting
@@ -258,3 +275,6 @@ echo(str("outer ", outer_w, " x ", outer_h, " x ", outer_z + back_t, " mm"));
 echo(str("inner depth ", inner_depth, " mm; screws: ", len(screw_pos)));
 echo(str("panel borders  side ", panel_border_side, "  bottom ",
          panel_border_bottom, "  top ", panel_border_top));
+echo(str("camera at ", cam_cx, ", ", cam_cy, "  band ", cam_band_h,
+         "mm tall, well ", cam_well_w, "mm -> ", (cam_band_h - cam_well_w)/2,
+         "mm margin each side"));
