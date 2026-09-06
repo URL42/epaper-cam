@@ -90,6 +90,24 @@ btn_d      = 8.2;                 // M8 panel mount
 usb_w      = 16;                  // slot, not a hole — easy to file, hard to move
 usb_h      = 9;
 
+// --- hanging ----------------------------------------------------------------
+// Two keyholes near the top of the back cover. Two rather than one because a
+// 178mm frame on a single hook pivots; two fix the orientation, which also
+// means it cannot be hung with the camera at the bottom.
+//
+// The slot rises ABOVE the round hole, which is the direction that works: the
+// frame drops under gravity, so the screw travels UP relative to the plate and
+// is captured by the narrow part with its head trapped behind.
+//
+// Each gets a pad on the INSIDE — 2.4mm of PLA around a keyhole is thin for
+// hanging a frame, and thickening it there costs nothing visible.
+keyhole_pitch  = 100;      // screw spacing to mark on the wall
+keyhole_d      = 9.0;      // clears a #6 / 4mm screw head
+keyhole_slot_w = 4.5;      // shank, not head
+keyhole_rise   = 9;        // how far it drops onto the screw
+keyhole_pad_d  = 18;
+keyhole_pad_z  = 2.5;
+
 // --- fasteners --------------------------------------------------------------
 insert_d = 3.2;                   // brass M2 heat-set
 insert_z = 4.0;
@@ -237,9 +255,34 @@ module shell() {
     }
 }
 
+// Round hole with a narrower slot rising from it, plus the pad it sits in.
+module keyhole_cut(cx, cy) {
+    translate([cx, cy, -1]) cylinder(d = keyhole_d, h = back_t + keyhole_pad_z + 2);
+    translate([cx - keyhole_slot_w/2, cy, -1])
+        cube([keyhole_slot_w, keyhole_rise, back_t + keyhole_pad_z + 2]);
+    translate([cx, cy + keyhole_rise, -1])
+        cylinder(d = keyhole_slot_w, h = back_t + keyhole_pad_z + 2);
+}
+
+keyhole_y  = outer_h - 30;
+keyhole_xs = [outer_w/2 - keyhole_pitch/2, outer_w/2 + keyhole_pitch/2];
+
 module back() {
     difference() {
-        rrect(outer_w, outer_h, 3, back_t);
+        union() {
+            rrect(outer_w, outer_h, 3, back_t);
+            // Pads inside, spanning the whole keyhole so the slot end is
+            // reinforced too, not just the round hole.
+            for (kx = keyhole_xs) {
+                translate([kx, keyhole_y, back_t])
+                    cylinder(d = keyhole_pad_d, h = keyhole_pad_z);
+                translate([kx, keyhole_y + keyhole_rise, back_t])
+                    cylinder(d = keyhole_pad_d, h = keyhole_pad_z);
+                translate([kx - keyhole_pad_d/2, keyhole_y, back_t])
+                    cube([keyhole_pad_d, keyhole_rise, keyhole_pad_z]);
+            }
+        }
+        for (kx = keyhole_xs) keyhole_cut(kx, keyhole_y);
         for (pos = screw_pos)
             translate([pos[0], pos[1], -1]) {
                 cylinder(d = screw_d, h = back_t + 2);
@@ -278,3 +321,5 @@ echo(str("panel borders  side ", panel_border_side, "  bottom ",
 echo(str("camera at ", cam_cx, ", ", cam_cy, "  band ", cam_band_h,
          "mm tall, well ", cam_well_w, "mm -> ", (cam_band_h - cam_well_w)/2,
          "mm margin each side"));
+echo(str("WALL SCREWS: ", keyhole_pitch, "mm apart, level, ",
+         outer_h - keyhole_y - keyhole_rise, "mm below the top of the frame"));
