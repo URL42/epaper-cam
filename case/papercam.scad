@@ -116,6 +116,14 @@ inner_depth  = 21;
 cam_lens_d = 3.2;                 // lens barrel
 cam_hole_d = cam_lens_d + 1.0;    // generous: you position the camera to this
 btn_d      = 8.2;                 // M8 panel mount
+
+// The top wall is not `wall` thick where the button goes: it is wall +
+// panel_ledge = 5.9mm, because the ledge that used to run round the panel is
+// still present along the top edge. A panel-mount switch has a short thread
+// and cannot reach through that, so the inside is counterbored back to leave
+// roughly half. 14mm across clears the nut and a socket to tighten it.
+btn_wall_t   = 2.9;
+btn_relief_d = 14;
 usb_w      = 16;                  // slot, not a hole — easy to file, hard to move
 usb_h      = 9;
 
@@ -243,8 +251,13 @@ module camera_hole() {
 }
 
 module button_hole() {
-    translate([btn_x, outer_h + 1, bezel_t + inner_depth/2])
+    bz = bezel_t + inner_depth/2;
+    // through-hole for the thread
+    translate([btn_x, outer_h + 1, bz])
         rotate([90,0,0]) cylinder(d = btn_d, h = wall + panel_ledge + 2);
+    // counterbore from the inside, leaving btn_wall_t of material outside
+    translate([btn_x, outer_h - btn_wall_t, bz])
+        rotate([90,0,0]) cylinder(d = btn_relief_d, h = 10);
 }
 
 // Right wall, roughly mid-height. Deliberately oversized — the board goes
@@ -386,6 +399,8 @@ echo(str("glass gap: ", panel_clear_w, "mm a side on length, ",
          panel_clear_h, "mm on height"));
 echo(str("entry opening ", cav_x1 - cav_x0, "mm for a ", panel_w,
          "mm panel -> lays straight in"));
+echo(str("button wall ", wall + panel_ledge, "mm counterbored to ", btn_wall_t,
+         "mm over ", btn_relief_d, "mm"));
 echo(str("panel enters past ", finger_count, " fingers on the bottom edge; ",
          "top and sides keep their ledge"));
 echo(str("inner depth ", inner_depth, " mm; screws: ", len(screw_pos)));
