@@ -138,7 +138,19 @@ usb_h      = 9;
 cam_wall_gap = 26.0;   // 25.4mm board + slip
 cam_wall_t   = 2.0;
 cam_wall_len = 25;     // how far down from the top wall
-cam_wall_h   = 15;     // how far back from the panel plane
+//
+// 20, not the 22 asked for: the ribs stand on the shelf at z=4.4 and the case
+// interior ends at 24.6, so 20.2mm is all there is. 22 would poke through the
+// back cover. It reaches the board anyway — with the camera against the front
+// face the board's back sits near z=21.5, and 20mm of rib takes us to 24.4.
+cam_wall_h   = 20;     // how far back from the panel plane
+
+// Triangular gussets bracing each rib sideways, which is the direction a tall
+// thin rib actually fails in. Only in the top band: below the panel's top edge
+// there is no shelf under them to stand on.
+gusset_base  = 6;
+gusset_h     = 11;
+gusset_t     = 2;
 
 // --- hanging ----------------------------------------------------------------
 // Two keyholes near the top of the back cover. Two rather than one because a
@@ -346,11 +358,24 @@ keyhole_xs = [outer_w/2 - keyhole_pitch/2, outer_w/2 + keyhole_pitch/2];
 // A slot for the board, open at the back so it drops in and can be taped at
 // the sides. Rooted in the top wall; runs down past the panel's top edge.
 module camera_walls() {
-    z0 = bezel_t + panel_rebate_depth;
-    for (x0 = [cam_cx - cam_wall_gap/2 - cam_wall_t,
-               cam_cx + cam_wall_gap/2])
+    z0     = bezel_t + panel_rebate_depth;
+    left   = cam_cx - cam_wall_gap/2 - cam_wall_t;   // outer face of the left rib
+    right  = cam_cx + cam_wall_gap/2 + cam_wall_t;   // outer face of the right rib
+
+    for (x0 = [left, cam_cx + cam_wall_gap/2])
         translate([x0, inner_top_y - cam_wall_len, z0])
             cube([cam_wall_t, cam_wall_len, cam_wall_h]);
+
+    // Gussets on the OUTER faces, so nothing intrudes into the board slot.
+    // Two per rib, both inside the top band where there is shelf beneath.
+    for (gy = [inner_top_y - 4, inner_top_y - 15]) {
+        translate([left - gusset_base, gy, z0]) rotate([90, 0, 0])
+            linear_extrude(gusset_t)
+                polygon([[0,0], [gusset_base,0], [gusset_base,gusset_h]]);
+        translate([right, gy, z0]) rotate([90, 0, 0])
+            linear_extrude(gusset_t)
+                polygon([[0,0], [gusset_base,0], [0,gusset_h]]);
+    }
 }
 
 // Flexible retention along the bottom of the pocket, in place of a ledge.
@@ -427,6 +452,8 @@ echo(str("button wall ", wall + panel_ledge, "mm counterbored to ", btn_wall_t,
          "mm over ", btn_relief_d, "mm"));
 echo(str("camera channel ", cam_wall_gap, "mm wide, ", cam_wall_len,
          "mm down from the top wall, ", cam_wall_h, "mm deep"));
+echo(str("rib top at z ", bezel_t + panel_rebate_depth + cam_wall_h,
+         "; interior ends at ", outer_z));
 echo(str("panel enters past ", finger_count, " fingers on the bottom edge; ",
          "top and sides keep their ledge"));
 echo(str("inner depth ", inner_depth, " mm; screws: ", len(screw_pos)));
