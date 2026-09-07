@@ -137,7 +137,11 @@ usb_h      = 9;
 // the tape does the holding, these just stop it wandering.
 cam_wall_gap = 26.0;   // 25.4mm board + slip
 cam_wall_t   = 2.0;
-cam_wall_len = 25;     // how far down from the top wall
+//
+// cam_wall_len is DERIVED, not chosen — see the derived section. At 25 the ribs
+// hung 2.9mm past the top of the panel pocket, straight into the path the
+// glass has to travel on its way in, and it would have jammed. They now stop
+// exactly at the pocket edge.
 //
 // 20, not the 22 asked for: the ribs stand on the shelf at z=4.4 and the case
 // interior ends at 24.6, so 20.2mm is all there is. 22 would poke through the
@@ -219,6 +223,10 @@ cam_band_h     = inner_top_y - pocket_top_y;
 
 cam_cx = outer_w/2 + cam_offset_x;
 cam_cy = (pocket_top_y + inner_top_y) / 2;
+
+// The ribs fill the top band and stop dead at the pocket. Anything longer
+// reaches into the panel's insertion path and blocks it.
+cam_wall_len = inner_top_y - pocket_top_y;
 
 // 16mm, not 22. The well only has to clear the 6.35mm module plus tape, and at
 // 22 it did not fit the band at all.
@@ -452,6 +460,8 @@ echo(str("button wall ", wall + panel_ledge, "mm counterbored to ", btn_wall_t,
          "mm over ", btn_relief_d, "mm"));
 echo(str("camera channel ", cam_wall_gap, "mm wide, ", cam_wall_len,
          "mm down from the top wall, ", cam_wall_h, "mm deep"));
+echo(str("ribs span y ", inner_top_y - cam_wall_len, " to ", inner_top_y,
+         "; pocket top at ", pocket_top_y, " -> clear"));
 echo(str("rib top at z ", bezel_t + panel_rebate_depth + cam_wall_h,
          "; interior ends at ", outer_z));
 echo(str("panel enters past ", finger_count, " fingers on the bottom edge; ",
