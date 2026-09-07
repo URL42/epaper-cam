@@ -127,6 +127,19 @@ btn_relief_d = 14;
 usb_w      = 16;                  // slot, not a hole — easy to file, hard to move
 usb_h      = 9;
 
+// --- camera channel ----------------------------------------------------------
+// Two ribs hanging off the inside of the top wall, forming a slot the board
+// drops into. Taping to a board's edges is far easier than reaching in to
+// stick its face to something, and it locates the camera over the lens hole
+// without needing to know where the mounting holes are.
+//
+// Width is the board plus a little, so it is a guide rather than a press fit —
+// the tape does the holding, these just stop it wandering.
+cam_wall_gap = 26.0;   // 25.4mm board + slip
+cam_wall_t   = 2.0;
+cam_wall_len = 25;     // how far down from the top wall
+cam_wall_h   = 15;     // how far back from the panel plane
+
 // --- hanging ----------------------------------------------------------------
 // Two keyholes near the top of the back cover. Two rather than one because a
 // 178mm frame on a single hook pivots; two fix the orientation, which also
@@ -305,6 +318,7 @@ module shell() {
                 camera_well();
             }
             bosses();
+            camera_walls();
             if (finger_count > 0) panel_fingers();
             if (use_board_posts) board_posts();
         }
@@ -328,6 +342,16 @@ module keyhole_cut(cx, cy) {
 
 keyhole_y  = outer_h - 30;
 keyhole_xs = [outer_w/2 - keyhole_pitch/2, outer_w/2 + keyhole_pitch/2];
+
+// A slot for the board, open at the back so it drops in and can be taped at
+// the sides. Rooted in the top wall; runs down past the panel's top edge.
+module camera_walls() {
+    z0 = bezel_t + panel_rebate_depth;
+    for (x0 = [cam_cx - cam_wall_gap/2 - cam_wall_t,
+               cam_cx + cam_wall_gap/2])
+        translate([x0, inner_top_y - cam_wall_len, z0])
+            cube([cam_wall_t, cam_wall_len, cam_wall_h]);
+}
 
 // Flexible retention along the bottom of the pocket, in place of a ledge.
 module panel_fingers() {
@@ -401,6 +425,8 @@ echo(str("entry opening ", cav_x1 - cav_x0, "mm for a ", panel_w,
          "mm panel -> lays straight in"));
 echo(str("button wall ", wall + panel_ledge, "mm counterbored to ", btn_wall_t,
          "mm over ", btn_relief_d, "mm"));
+echo(str("camera channel ", cam_wall_gap, "mm wide, ", cam_wall_len,
+         "mm down from the top wall, ", cam_wall_h, "mm deep"));
 echo(str("panel enters past ", finger_count, " fingers on the bottom edge; ",
          "top and sides keep their ledge"));
 echo(str("inner depth ", inner_depth, " mm; screws: ", len(screw_pos)));
