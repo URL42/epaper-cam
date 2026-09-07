@@ -64,10 +64,14 @@ panel_border_top    = panel_h - active_h - panel_border_bottom;   // 10.28
 panel_rebate_depth  = panel_t + 0.8;
 panel_ledge         = 3.5;
 
-// Clearance around the glass, separate from the general `clear`. 0.4mm made it
-// a fight to seat; 1.5mm a side lets it drop in and still hides behind a
-// 3.5mm bezel overlap. Grows the outer shell by 2.2mm, which is free.
-panel_clear         = 1.5;
+// Clearance around the glass, separate from the general `clear`, and separate
+// per axis because only the long one was tight. 0.4mm was a press fit, 1.5mm
+// still needed persuading along the length. 2.5mm a side there now.
+//
+// Both stay hidden behind the 3.5mm bezel overlap, so loosening costs nothing
+// visible.
+panel_clear_w       = 2.5;   // along the 170.2mm length
+panel_clear_h       = 1.5;
 
 // --- shell ------------------------------------------------------------------
 bezel_side   = 10;
@@ -124,7 +128,14 @@ board_org     = [60, 40];         // where the board's bottom-left corner sits
 post_h        = 4;
 
 // --- derived ----------------------------------------------------------------
-outer_w = panel_w + 2*panel_clear + 2*wall;
+outer_w = panel_w + 2*panel_clear_w + 2*wall;
+
+// The deep cavity is inset from the PANEL edge, not from the outer edge, so
+// the ledge stays a full panel_ledge wide however much clearance the glass is
+// given. Tied to the outer edge instead, every extra millimetre of clearance
+// would have eaten a millimetre of the shelf the glass rests on.
+cav_x0 = (outer_w - panel_w)/2 + panel_ledge;
+cav_x1 = outer_w - cav_x0;
 outer_h = panel_h + bezel_top + bezel_bottom;
 outer_z = bezel_t + panel_t + inner_depth;
 
@@ -136,7 +147,7 @@ cam_offset_x = 0;
 // inner face of the top wall, rather than at half the nominal bezel. Those are
 // not the same: the old figure put the well's top edge 0.4mm PAST the inner
 // wall, which is what made it read as crowded against it.
-pocket_top_y   = bezel_bottom + panel_h + panel_clear;
+pocket_top_y   = bezel_bottom + panel_h + panel_clear_h;
 inner_top_y    = outer_h - wall;
 cam_band_h     = inner_top_y - pocket_top_y;
 
@@ -176,8 +187,9 @@ module panel_pocket() {
     // surface make OpenCSG render a ghost membrane across the window — it
     // looks precisely like something covering the hole. Always overlap
     // subtracted solids rather than butting them.
-    translate([(outer_w - panel_w)/2 - panel_clear, bezel_bottom - panel_clear, bezel_t])
-        cube([panel_w + 2*panel_clear, panel_h + 2*panel_clear,
+    translate([(outer_w - panel_w)/2 - panel_clear_w,
+               bezel_bottom - panel_clear_h, bezel_t])
+        cube([panel_w + 2*panel_clear_w, panel_h + 2*panel_clear_h,
               panel_rebate_depth + 0.1]);
 }
 
@@ -203,11 +215,12 @@ module button_hole() {
 }
 
 // Right wall, roughly mid-height. Deliberately oversized — the board goes
-// wherever it fits. Cuts through the ledge as well as the wall, or it would
-// open into 3.5mm of solid plastic.
+// wherever it fits. Runs from the cavity edge outward, so it always breaks
+// through however the ledge and clearances are set; a fixed depth stopped
+// short the moment the cavity moved inboard.
 module usb_slot() {
-    translate([outer_w - wall - panel_ledge - 1, outer_h/2 - usb_w/2, bezel_t + 4])
-        cube([wall + panel_ledge + 2, usb_w, usb_h]);
+    translate([cav_x1 - 1, outer_h/2 - usb_w/2, bezel_t + 4])
+        cube([outer_w - cav_x1 + 2, usb_w, usb_h]);
 }
 
 module bosses(bore = false) {
@@ -233,9 +246,9 @@ module shell() {
             difference() {
                 rrect(outer_w, outer_h, 3, outer_z);
                 // Behind the panel: stepped in, leaving the ledge.
-                translate([wall + panel_ledge, wall + panel_ledge,
+                translate([cav_x0, wall + panel_ledge,
                            bezel_t + panel_rebate_depth])
-                    cube([outer_w - 2*(wall + panel_ledge),
+                    cube([cav_x1 - cav_x0,
                           outer_h - 2*(wall + panel_ledge), outer_z]);
                 // The panel's own pocket, full depth of the rebate.
                 panel_pocket();
@@ -315,6 +328,9 @@ else if (part == "back")   back();
 else { shell(); translate([outer_w + 10, 0, 0]) back(); }
 
 echo(str("outer ", outer_w, " x ", outer_h, " x ", outer_z + back_t, " mm"));
+echo(str("glass gap: ", panel_clear_w, "mm a side on length, ",
+         panel_clear_h, "mm on height; ledge ",
+         cav_x0 - (outer_w - panel_w)/2, "mm"));
 echo(str("inner depth ", inner_depth, " mm; screws: ", len(screw_pos)));
 echo(str("panel borders  side ", panel_border_side, "  bottom ",
          panel_border_bottom, "  top ", panel_border_top));
