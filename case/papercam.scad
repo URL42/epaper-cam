@@ -117,6 +117,15 @@ cam_lens_d = 3.2;                 // lens barrel
 cam_hole_d = cam_lens_d + 1.0;    // generous: you position the camera to this
 btn_d      = 8.2;                 // M8 panel mount
 
+// No USB opening. The board sits in the top band with its camera against the
+// front face, which puts the USB-C port somewhere no cable can reach through a
+// side wall — there is no line from any exterior face to the connector.
+//
+// Charging therefore means five screws and lifting the board out. Acceptable
+// at a 2000mAh cell and weeks between charges; if it becomes tiresome the fix
+// is a short USB-C pigtail glued into a hole in the bottom wall, or charging
+// through the driver board's BAT connector instead.
+
 // The top wall is not `wall` thick where the button goes: it is wall +
 // panel_ledge = 5.9mm, because the ledge that used to run round the panel is
 // still present along the top edge. A panel-mount switch has a short thread
@@ -124,8 +133,6 @@ btn_d      = 8.2;                 // M8 panel mount
 // roughly half. 14mm across clears the nut and a socket to tighten it.
 btn_wall_t   = 2.9;
 btn_relief_d = 14;
-usb_w      = 16;                  // slot, not a hole — easy to file, hard to move
-usb_h      = 9;
 
 // --- camera channel ----------------------------------------------------------
 // Two ribs hanging off the inside of the top wall, forming a slot the board
@@ -293,15 +300,6 @@ module button_hole() {
         rotate([90,0,0]) cylinder(d = btn_relief_d, h = 10);
 }
 
-// Right wall, roughly mid-height. Deliberately oversized — the board goes
-// wherever it fits. Runs from the cavity edge outward, so it always breaks
-// through however the ledge and clearances are set; a fixed depth stopped
-// short the moment the cavity moved inboard.
-module usb_slot() {
-    translate([cav_x1 - 1, outer_h/2 - usb_w/2, bezel_t + 4])
-        cube([outer_w - cav_x1 + 2, usb_w, usb_h]);
-}
-
 module bosses(bore = false) {
     for (pos = screw_pos)
         translate([pos[0], pos[1], bezel_t])
@@ -345,7 +343,6 @@ module shell() {
         window();
         camera_hole();
         button_hole();
-        usb_slot();
         bosses(bore = true);
         if (use_board_posts) board_posts(bore = true);
     }
