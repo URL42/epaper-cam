@@ -73,6 +73,31 @@ panel_ledge         = 3.5;
 panel_clear_w       = 2.5;   // along the 170.2mm length
 panel_clear_h       = 1.5;
 
+// --- panel entry ------------------------------------------------------------
+// The ledge that supports the glass also traps it: with 3.5mm of shelf each
+// side the gap between ledges is 163.2mm, and the panel is 170.2mm. It cannot
+// pass through from the back at all.
+//
+// So the bottom edge loses its fixed ledge and gains flexible fingers instead.
+// Push the panel in from behind, the fingers deflect back, the panel seats
+// against the bezel, the fingers spring over its rear face and hold it. The
+// top and both sides keep their solid ledge, so three edges still support the
+// glass properly.
+//
+// The fingers are ramped on the entry side so the panel deflects them smoothly
+// rather than needing to be forced. Thin in Z on purpose: that is the
+// direction they must bend, and a printed cantilever bending across its layers
+// is stronger than one bending along them.
+//
+// If they snap — PLA is brittle and this is a real risk — set finger_count = 0
+// and hold the bottom edge with tape. Nothing else depends on them.
+finger_count  = 3;
+finger_w      = 14;      // along the panel's length
+finger_reach  = 2.5;     // how far it overlaps the glass edge
+finger_t      = 1.2;     // deflecting thickness
+finger_arm    = 9;       // cantilever length; longer bends more easily
+finger_ramp   = 1.6;     // lead-in so it is not a press fit
+
 // --- shell ------------------------------------------------------------------
 bezel_side   = 10;
 bezel_bottom = 10;
@@ -246,10 +271,12 @@ module shell() {
             difference() {
                 rrect(outer_w, outer_h, 3, outer_z);
                 // Behind the panel: stepped in, leaving the ledge.
-                translate([cav_x0, wall + panel_ledge,
+                // Cavity runs right down past the panel's bottom edge, so
+                // there is no ledge there and the glass can be pushed in.
+                translate([cav_x0, wall,
                            bezel_t + panel_rebate_depth])
                     cube([cav_x1 - cav_x0,
-                          outer_h - 2*(wall + panel_ledge), outer_z]);
+                          outer_h - wall - (wall + panel_ledge), outer_z]);
                 // The panel's own pocket, full depth of the rebate.
                 panel_pocket();
                 // The camera has to reach the front face, and it lives above
@@ -257,6 +284,7 @@ module shell() {
                 camera_well();
             }
             bosses();
+            if (finger_count > 0) panel_fingers();
             if (use_board_posts) board_posts();
         }
         window();
@@ -279,6 +307,24 @@ module keyhole_cut(cx, cy) {
 
 keyhole_y  = outer_h - 30;
 keyhole_xs = [outer_w/2 - keyhole_pitch/2, outer_w/2 + keyhole_pitch/2];
+
+// Flexible retention along the bottom of the pocket, in place of a ledge.
+module panel_fingers() {
+    fz   = bezel_t + panel_t + 0.2;                 // just behind the glass
+    ytip = bezel_bottom - panel_clear_h;            // the pocket's bottom edge
+    for (i = [0 : finger_count - 1]) {
+        cx = cav_x0 + (cav_x1 - cav_x0) * (i + 0.5) / finger_count;
+        translate([cx - finger_w/2, ytip, fz]) {
+            // arm, rooted in the wall below the pocket and reaching up into it
+            translate([0, -finger_arm, 0]) cube([finger_w, finger_arm + finger_reach, finger_t]);
+            // ramp on the entry face so the panel pushes it aside
+            translate([0, finger_reach, finger_t])
+                rotate([0, 90, 0])
+                    linear_extrude(finger_w)
+                        polygon([[0,0], [0,-finger_reach], [-finger_ramp,-finger_reach]]);
+        }
+    }
+}
 
 module back() {
     difference() {
@@ -331,6 +377,8 @@ echo(str("outer ", outer_w, " x ", outer_h, " x ", outer_z + back_t, " mm"));
 echo(str("glass gap: ", panel_clear_w, "mm a side on length, ",
          panel_clear_h, "mm on height; ledge ",
          cav_x0 - (outer_w - panel_w)/2, "mm"));
+echo(str("panel enters past ", finger_count, " fingers on the bottom edge; ",
+         "top and sides keep their ledge"));
 echo(str("inner depth ", inner_depth, " mm; screws: ", len(screw_pos)));
 echo(str("panel borders  side ", panel_border_side, "  bottom ",
          panel_border_bottom, "  top ", panel_border_top));
