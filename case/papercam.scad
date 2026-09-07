@@ -155,11 +155,19 @@ post_h        = 4;
 // --- derived ----------------------------------------------------------------
 outer_w = panel_w + 2*panel_clear_w + 2*wall;
 
-// The deep cavity is inset from the PANEL edge, not from the outer edge, so
-// the ledge stays a full panel_ledge wide however much clearance the glass is
-// given. Tied to the outer edge instead, every extra millimetre of clearance
-// would have eaten a millimetre of the shelf the glass rests on.
-cav_x0 = (outer_w - panel_w)/2 + panel_ledge;
+// NO SIDE LEDGES. The cavity opening is deliberately a hair WIDER than the
+// glass so the panel drops straight in from the back.
+//
+// The ledge was 3.5mm a side, leaving a 163.2mm gap for a 170.2mm panel — it
+// could not be fitted at any angle, only threaded in edgewise, and the pocket
+// is too shallow to tilt a 170mm sheet of glass. Trying to slide it in through
+// a slot was solving the wrong problem: the fix is to stop obstructing it.
+//
+// What holds the panel now: the bezel lip in front, the fingers along the
+// bottom edge behind, and tape. Three things, none of which are in the way
+// while you are fitting it.
+panel_entry_gap = 0.75;                                 // opening minus panel
+cav_x0 = (outer_w - panel_w)/2 - panel_entry_gap/2;
 cav_x1 = outer_w - cav_x0;
 outer_h = panel_h + bezel_top + bezel_bottom;
 outer_z = bezel_t + panel_t + inner_depth;
@@ -375,8 +383,9 @@ else { shell(); translate([outer_w + 10, 0, 0]) back(); }
 
 echo(str("outer ", outer_w, " x ", outer_h, " x ", outer_z + back_t, " mm"));
 echo(str("glass gap: ", panel_clear_w, "mm a side on length, ",
-         panel_clear_h, "mm on height; ledge ",
-         cav_x0 - (outer_w - panel_w)/2, "mm"));
+         panel_clear_h, "mm on height"));
+echo(str("entry opening ", cav_x1 - cav_x0, "mm for a ", panel_w,
+         "mm panel -> lays straight in"));
 echo(str("panel enters past ", finger_count, " fingers on the bottom edge; ",
          "top and sides keep their ledge"));
 echo(str("inner depth ", inner_depth, " mm; screws: ", len(screw_pos)));
