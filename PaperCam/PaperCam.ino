@@ -572,14 +572,15 @@ static void take_photo(void)
     }
 
     // Printed once, on the first shot, because anything in setup() scrolls
-    // away behind the shots that follow it.
+    // away behind the shots that follow it. Probes with the CURRENT values,
+    // as print_tone() does — probing with 0 would reset what it reports on.
     if (shot_count == 1 && cam) {
         Serial.printf("  sensor 0x%04x supports: sharpness %s | denoise %s | "
                       "ae_level %s | contrast %s | brightness %s\n",
                       cam->id.PID,
-                      cam->set_sharpness  && cam->set_sharpness(cam, 0) == 0 ? "Y" : "n",
-                      cam->set_denoise    && cam->set_denoise(cam, 0) == 0 ? "Y" : "n",
-                      cam->set_ae_level   && cam->set_ae_level(cam, 0) == 0 ? "Y" : "n",
+                      cam->set_sharpness  && cam->set_sharpness(cam, cam_sharpness) == 0 ? "Y" : "n",
+                      cam->set_denoise    && cam->set_denoise(cam, cam_denoise) == 0 ? "Y" : "n",
+                      cam->set_ae_level   && cam->set_ae_level(cam, cam_ae_level) == 0 ? "Y" : "n",
                       cam->set_contrast   && cam->set_contrast(cam, 0) == 0 ? "Y" : "n",
                       cam->set_brightness && cam->set_brightness(cam, 0) == 0 ? "Y" : "n");
     }
@@ -593,6 +594,9 @@ static void take_photo(void)
     const int got = capture_burst();
     if (got == 0) {
         Serial.println("capture FAILED — no usable frames");
+        // The self-timer left the LED solid; a solid LED means "capturing",
+        // so leaving it on after a failure says the opposite of what happened.
+        digitalWrite(PIN_LED, LED_OFF);
         return;
     }
     const uint32_t t_capture = millis();
@@ -600,6 +604,7 @@ static void take_photo(void)
     const int used = merge_burst(got);
     if (used == 0) {
         Serial.println("merge FAILED — every frame rejected");
+        digitalWrite(PIN_LED, LED_OFF);
         return;
     }
     const uint32_t t_merge = millis();
@@ -613,6 +618,7 @@ static void take_photo(void)
     uint8_t *fbuf = (uint8_t *)epaper.getPointer();
     if (!fbuf) {
         Serial.println("getPointer() returned NULL — not in grey mode?");
+        digitalWrite(PIN_LED, LED_OFF);
         return;
     }
     dither_fs_gray4(burst[0], fbuf, scratch);
@@ -707,6 +713,33 @@ void setup(void)
     epaper.initGrayMode(GRAY_LEVEL4);
     Serial.println("initGrayMode(GRAY_LEVEL4)");
 
+    /*
+     * Put the panel controller into deep sleep NOW, not after the next refresh.
+     *
+     * begin() runs the UC8179 init, which sends POWER ON (0x04) and leaves the
+     * booster running — but EPaper's own flag starts out claiming the panel is
+     * asleep, so a plain sleep() would be a no-op. Only update() ever sleeps
+     * it, and on the normal wall-hanging path there is no update: a photo
+     * exists, we leave the panel alone, idle five minutes and deep-sleep the
+     * ESP32 with the panel still powered. That costs battery, and panel makers
+     * warn against leaving the high-voltage supply on.
+     *
+     * wake() on a "sleeping" panel resets it and re-runs the grey init; none
+     * of those paths send REFRESH (0x12), so the image is untouched. sleep()
+     * then powers it off (0x02) and deep-sleeps it (0x07 0xA5). From here the
+     * flag and the panel agree, and every later update() wakes and re-sleeps it.
+     *
+     * Costs roughly 150-300ms per boot (the init's 100ms POWER ON delay, BUSY
+     * waits, and the library's one-time OTP probe, which would otherwise have
+     * run inside the first update()). Paid on every wake, worth it.
+     *
+     * After initGrayMode for consistency: wake() picks the grey init only once
+     * grey mode is set, so this matches what every later update() does.
+     */
+    epaper.wake();
+    epaper.sleep();
+    Serial.println("panel controller in deep sleep");
+
     Serial.print("esp_camera_init... ");
     if (!camera_start()) {
         show_message("CAMERA FAIL", "see serial");
@@ -719,22 +752,15 @@ void setup(void)
      * Probe what this sensor actually implements. Each setter returns 0 on
      * success and -1 when the driver has no implementation for it, so calling
      * with a harmless value is a direct capability test.
+     *
+     * The probe MUST come before the defaults are applied. "Harmless" means
+     * 0, and the setter really does set it: probing after applying silently
+     * reset sharpness and denoise to 0 on every boot, and every wake from
+     * sleep is a boot. Pressing '?' re-applied the right values, so checking
+     * for the bug was exactly what hid it.
      */
     cam = esp_camera_sensor_get();
     if (cam) {
-        // Apply the bench-chosen values. Each returns 0 on success; a -1 here
-        // would mean this is a different sensor from the one they were tuned
-        // on, which is worth hearing about rather than silently ignoring.
-        const int rs = cam->set_sharpness ? cam->set_sharpness(cam, CAM_SHARPNESS) : -1;
-        const int rd = cam->set_denoise   ? cam->set_denoise(cam, CAM_DENOISE)     : -1;
-        const int ra = cam->set_ae_level  ? cam->set_ae_level(cam, CAM_AE_LEVEL)   : -1;
-        const int rv = cam->set_vflip     ? cam->set_vflip(cam, CAM_VFLIP)         : -1;
-        const int rh = cam->set_hmirror   ? cam->set_hmirror(cam, CAM_HMIRROR)     : -1;
-        Serial.printf("sensor defaults: sharpness=%d(rc %d) denoise=%d(rc %d) ae=%d(rc %d)\n",
-                      CAM_SHARPNESS, rs, CAM_DENOISE, rd, CAM_AE_LEVEL, ra);
-        Serial.printf("                 vflip=%d(rc %d) hmirror=%d(rc %d)\n",
-                      CAM_VFLIP, rv, CAM_HMIRROR, rh);
-
         Serial.printf("sensor PID 0x%04x\n", cam->id.PID);
         Serial.println("control support:");
         Serial.printf("  sharpness  %s\n",
@@ -747,6 +773,19 @@ void setup(void)
                       cam->set_contrast && cam->set_contrast(cam, 0) == 0 ? "YES" : "no");
         Serial.printf("  brightness %s\n",
                       cam->set_brightness && cam->set_brightness(cam, 0) == 0 ? "YES" : "no");
+
+        // Apply the bench-chosen values. Each returns 0 on success; a -1 here
+        // would mean this is a different sensor from the one they were tuned
+        // on, which is worth hearing about rather than silently ignoring.
+        const int rs = cam->set_sharpness ? cam->set_sharpness(cam, CAM_SHARPNESS) : -1;
+        const int rd = cam->set_denoise   ? cam->set_denoise(cam, CAM_DENOISE)     : -1;
+        const int ra = cam->set_ae_level  ? cam->set_ae_level(cam, CAM_AE_LEVEL)   : -1;
+        const int rv = cam->set_vflip     ? cam->set_vflip(cam, CAM_VFLIP)         : -1;
+        const int rh = cam->set_hmirror   ? cam->set_hmirror(cam, CAM_HMIRROR)     : -1;
+        Serial.printf("sensor defaults: sharpness=%d(rc %d) denoise=%d(rc %d) ae=%d(rc %d)\n",
+                      CAM_SHARPNESS, rs, CAM_DENOISE, rd, CAM_AE_LEVEL, ra);
+        Serial.printf("                 vflip=%d(rc %d) hmirror=%d(rc %d)\n",
+                      CAM_VFLIP, rv, CAM_HMIRROR, rh);
     }
 
     // format-on-failure: a fresh board has no filesystem, and there is nothing
