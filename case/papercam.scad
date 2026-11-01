@@ -1,37 +1,45 @@
 // PaperCam enclosure — parametric, for a Bambu A1.
 //
 //   part = "shell"  the front: bezel, walls, and every opening
-//   part = "back"   flat cover, M2 into heat-set inserts
+//   part = "back"   cover with the board's locating pins, M2 into heat-set inserts
 //   part = "both"   side by side for inspection
+//   part = "coupon_shell" / "coupon_back" / "coupon"
+//                   the top band only, and the piece of cover that meets it:
+//                   lens hole, ribs, USB-C slot and pins, for about an hour of
+//                   printing instead of three. Print these before the shell.
 //
 // PRINT test_fit = true FIRST — a thin skeleton with only the panel window,
 // lens hole and button hole. Minutes of filament, and it settles the one thing
 // no datasheet states: where the active area sits inside the glass.
 //
 // ---------------------------------------------------------------------------
-// DESIGN NOTE: why there is almost nothing inside
+// DESIGN NOTE: the lens hole is the datum
 //
-// Earlier versions grew board posts, a battery pocket and a camera retainer.
-// All of that has gone. Printed mounts earn their keep in production; for one
-// unit each is just another measurement that can be wrong, and every wrong one
-// costs a three-hour print.
+// The camera was first positioned by hand — held centred in the bore and
+// taped down. That proved too imprecise, so the board is now located by two
+// pins on the back cover through its middle mounting holes, which press it
+// forward and put the lens on the hole every time the cover goes on.
 //
-// Everything inside is held by foam tape and Velcro. The important consequence
-// is that THE CAMERA ALIGNS TO THE HOLE, not the hole to the camera: hold the
-// module against the inside of the front face, centred in the bore, stick it
-// down. That single inversion removes every hard constraint this design was
-// fighting — ribbon length, where the camera sits on the board, whether the
-// board lives in the top band or behind the panel. All of it becomes a choice
-// made with the parts in your hands.
+// The hole does NOT move to suit the pins. It stays where the camera is
+// already fitted, and the pins and the USB-C slot are placed from the LENS by
+// measurement — lens to holes, lens to port — never chained through board
+// edges, where each step adds error. The hole is also oversized (7mm for a
+// 3.2mm lens) so that whatever error remains is absorbed by the hole rather
+// than showing up as a lens half-hidden behind the bezel.
 //
-// Board posts survive as an option, off by default, from measured holes:
-// 20.5mm centres both pairs, 2.25mm and 18mm up from the bottom edge, 2.5mm
-// diameter. Turn them on if the tape ever annoys you.
+// The tolerance chain: hole slop in the cover's screws, pin slop in the
+// board's 2.5mm holes, and print error — about +-0.4mm in all, against the
+// +-1.9mm the hole forgives.
 //
 // CONFIDENCE
 //   panel outline / active area   T075A04 datasheet, trustworthy
 //   board 41.3 x 25.4             measured; an unsourced spec says 41 x 22
-//   board hole positions          measured
+//   board hole pitch / diameter   measured: 20.5mm centres, 2.5mm
+//   lens-relative board numbers   FIT-CHECKED, not measured: the coupon print
+//                                 (2026-11-01) seated the pins in the holes,
+//                                 centred the lens in its hole, and took the
+//                                 USB-C plug. Good to within the slop; the
+//                                 true values are still unknown.
 //   panel borders                 MEASURED: 3mm plain edges, 10.28mm FPC edge.
 //                                 The active area is not centred in the glass.
 // ---------------------------------------------------------------------------
@@ -78,25 +86,23 @@ panel_clear_h       = 1.5;
 // side the gap between ledges is 163.2mm, and the panel is 170.2mm. It cannot
 // pass through from the back at all.
 //
-// So the bottom edge loses its fixed ledge and gains flexible fingers instead.
-// Push the panel in from behind, the fingers deflect back, the panel seats
-// against the bezel, the fingers spring over its rear face and hold it. The
-// top and both sides keep their solid ledge, so three edges still support the
-// glass properly.
+// So the bottom edge has three short hooks instead of a ledge. Tuck the
+// panel's bottom edge under them, then lay the top edge down into the pocket.
 //
-// The fingers are ramped on the entry side so the panel deflects them smoothly
-// rather than needing to be forced. Thin in Z on purpose: that is the
-// direction they must bend, and a printed cantilever bending across its layers
-// is stronger than one bending along them.
+// They are RIGID, whatever earlier versions of this comment claimed. The arm
+// lies in the solid bezel band below the cavity, which fuses it along its
+// length; only the 2.5mm lip over the glass is free, and that is a hook, not a
+// spring. Rigid is what the tuck-and-lay fitting wants anyway.
 //
-// If they snap — PLA is brittle and this is a real risk — set finger_count = 0
-// and hold the bottom edge with tape. Nothing else depends on them.
+// The arm only has to root the lip in that band. At 9mm it was longer than
+// the 8.5mm the band has, and poked 0.5mm out through the bottom face as three
+// 14mm slivers — invisible in preview, obvious in the first real render.
 finger_count  = 3;
 finger_w      = 14;      // along the panel's length
 finger_reach  = 2.5;     // how far it overlaps the glass edge
-finger_t      = 1.2;     // deflecting thickness
-finger_arm    = 9;       // cantilever length; longer bends more easily
-finger_ramp   = 1.6;     // lead-in so it is not a press fit
+finger_t      = 1.2;     // lip thickness
+finger_arm    = 6;       // root in the bezel band; must stay inside the wall
+finger_ramp   = 1.6;     // lead-in on the lip's entry face
 
 // --- shell ------------------------------------------------------------------
 bezel_side   = 10;
@@ -113,18 +119,29 @@ clear        = 0.4;
 inner_depth  = 21;
 
 // --- openings ---------------------------------------------------------------
-cam_lens_d = 3.2;                 // lens barrel
-cam_hole_d = cam_lens_d + 1.0;    // generous: you position the camera to this
-btn_d      = 8.2;                 // M8 panel mount
+cam_lens_d    = 3.2;              // lens barrel
+// Oversized on purpose: the lens can sit up to this far off centre and still
+// see out unobstructed. Was 0.5, which needed the camera placed to half a
+// millimetre by hand.
+cam_hole_slop = 1.9;
+cam_hole_d    = cam_lens_d + 2*cam_hole_slop;   // 7.0
+cam_hole_csk  = 2.4;              // countersink growth at the front face (45 deg)
+btn_d         = 8.2;              // M8 panel mount
 
-// No USB opening. The board sits in the top band with its camera against the
-// front face, which puts the USB-C port somewhere no cable can reach through a
-// side wall — there is no line from any exterior face to the connector.
+// --- USB-C charging slot -------------------------------------------------------
+// Through the top wall, straight at the XIAO's port, which faces the top wall
+// and lines up with the lens across the board's width.
 //
-// Charging therefore means five screws and lifting the board out. Acceptable
-// at a 2000mAh cell and weeks between charges; if it becomes tiresome the fix
-// is a short USB-C pigtail glued into a hole in the bottom wall, or charging
-// through the driver board's BAT connector instead.
+// Sized for the cable's moulded PLASTIC body, not the metal plug. The wall is
+// 5.9mm thick here (see the button note), and the metal tip is only ~6.6mm
+// long, so with a metal-sized hole the plastic would stop at the outer face
+// and the tip would barely reach the port. A body-sized slot lets the plastic
+// go right into the wall.
+usb_plug_w  = 13.5;   // (E) cable's plastic body, across — measure yours
+usb_plug_t  = 7.5;    // (E) and through its thickness
+usb_clear   = 0.4;    // a side
+usb_depth   = 10;     // (D) fit-checked: lens front face -> port centreline, front to back
+usb_x_off   = 0;      // port centre vs lens centre across the board, + toward the button
 
 // The top wall is not `wall` thick where the button goes: it is wall +
 // panel_ledge = 5.9mm, because the ledge that used to run round the panel is
@@ -181,20 +198,53 @@ keyhole_rise   = 9;        // how far it drops onto the screw
 keyhole_pad_d  = 18;
 keyhole_pad_z  = 2.5;
 
+// --- top-band test coupon -------------------------------------------------------
+// A slice of the shell around the camera, and the matching slice of cover.
+// Everything new in this revision lives here — pins, slot, bigger lens hole —
+// so an hour of printing answers what a full shell would.
+//
+// The slices are cut from the real parts, not modelled separately, so the
+// pins, holes and slot are exactly where the real ones are. Two things are
+// added: walls along the cut edges, and a rim on the cover's inside face that
+// drops inside those walls. The full cover is located by its corner screws,
+// none of which fall in this slice; the rim does that job instead, to the same
+// sort of accuracy, which is what makes the coupon a fair test of the pins.
+coupon_half_w    = 30;     // either side of the lens: takes in the ribs and gussets
+coupon_rim_t     = 1.6;
+coupon_rim_h     = 2.0;
+coupon_rim_clear = 0.25;   // a side
+
 // --- fasteners --------------------------------------------------------------
 insert_d = 3.2;                   // brass M2 heat-set
 insert_z = 4.0;
 screw_d  = 2.4;
+screw_head_d = 4.0;               // M2 countersunk head is 3.8; 90 degree seat
 boss_d   = 6.5;
 
-// --- optional board posts (off) ---------------------------------------------
-use_board_posts = false;
-bp_pitch      = 20.5;             // measured, both pairs
-bp_bottom_y   = 2.25;             // hole centre from board's bottom edge
-bp_middle_y   = 18;
-bp_hole_d     = 2.5;
-board_org     = [60, 40];         // where the board's bottom-left corner sits
-post_h        = 4;
+// --- board locating pins --------------------------------------------------------
+// Two pins standing off the back cover's inside face, into the driver board's
+// middle mounting holes. The shoulder at the base of each pin bears on the
+// board and pushes it forward, seating the lens against the inside of the
+// front face; the pin itself fixes it sideways and up-down.
+//
+// On the COVER, not the shell, because the middle holes sit behind the glass
+// where the shell has nothing to build a post from.
+//
+// Every number with a letter is measured FROM THE LENS (see the design note).
+board_pins       = true;
+pin_pitch        = 20.5;   // measured: middle pair centres
+board_hole_d     = 2.5;    // measured
+lens_to_pins     = 15;     // (A) fit-checked: lens centre -> middle-hole centres, along the board
+lens_to_pins_x   = 0;      // (B) hole pair's midpoint vs lens, across the board, + toward the button
+board_stack      = 19;     // (C) fit-checked: lens front face -> back face of the driver board
+lens_to_board_top = 7;     // (D) fit-checked: lens centre -> board's top (USB-C) edge
+board_len        = 41.3;   // measured
+
+pin_d            = board_hole_d - 0.3;   // slip fit; printed holes run small, pins run fat
+pin_len          = 2.4;    // past the shoulder: through a 1.6mm PCB and a little beyond
+pin_tip          = 0.8;    // taper, so the pins find the holes blind as the cover closes
+shoulder_d       = 4.5;    // bears on the hole's pad ring, clear of nearby parts
+pin_preload      = 0.2;    // shoulder reaches this far past the board's back face
 
 // --- derived ----------------------------------------------------------------
 outer_w = panel_w + 2*panel_clear_w + 2*wall;
@@ -220,16 +270,40 @@ outer_z = bezel_t + panel_t + inner_depth;
 // forward beside the ribbon, rather than being pushed aside to clear it.
 cam_offset_x = 0;
 
-// Vertically CENTRED IN THE BAND between the top of the panel pocket and the
-// inner face of the top wall, rather than at half the nominal bezel. Those are
-// not the same: the old figure put the well's top edge 0.4mm PAST the inner
-// wall, which is what made it read as crowded against it.
+// Centred between the top of the panel pocket and `inner_top_y`, the line of
+// the top wall's nominal inner face.
+//
+// That line is NOT the real inside face. A strip of the old top ledge, 3.5mm
+// deep, still runs along the top wall behind the bezel, so the cavity actually
+// stops at `top_face_y`, 141.3 — and the camera is ~1.75mm above the true centre
+// of its band. It stays there: the camera is already fitted to this hole, and
+// the hole is the datum everything else is measured from.
 pocket_top_y   = bezel_bottom + panel_h + panel_clear_h;
 inner_top_y    = outer_h - wall;
+top_face_y     = outer_h - wall - panel_ledge;   // the real inside face, 141.3
 cam_band_h     = inner_top_y - pocket_top_y;
 
 cam_cx = outer_w/2 + cam_offset_x;
 cam_cy = (pocket_top_y + inner_top_y) / 2;
+
+// Lens-relative features, in shell coordinates. "Toward the button" is +x.
+pin_cx   = cam_cx + lens_to_pins_x;
+pin_y    = cam_cy - lens_to_pins;
+pin_xs   = [pin_cx - pin_pitch/2, pin_cx + pin_pitch/2];
+board_back_z = bezel_t + board_stack;            // lens front sits on the bezel's inside
+shoulder_len = outer_z - board_back_z + pin_preload;   // from the cover's inside face
+
+usb_x    = cam_cx + usb_x_off;
+usb_z    = bezel_t + usb_depth;
+usb_w    = usb_plug_w + 2*usb_clear;
+usb_t    = usb_plug_t + 2*usb_clear;
+
+// The coupon reaches down past the board's bottom edge, so the whole board
+// sits in it and the pins can be judged against the real thing.
+board_bottom_y = cam_cy + lens_to_board_top - board_len;
+coupon_x0 = cam_cx - coupon_half_w;
+coupon_x1 = cam_cx + coupon_half_w;
+coupon_y0 = min(board_bottom_y, pin_y - shoulder_d/2) - 4 - wall;
 
 // The ribs fill the top band and stop dead at the pocket. Anything longer
 // reaches into the panel's insertion path and blocks it.
@@ -242,11 +316,43 @@ btn_x  = outer_w - bezel_side - 12;
 
 // Five, not six. A boss at top-centre landed exactly on the camera, which is
 // also at top-centre — so that one is gone and the top keeps only its corners.
+//
+// The bottom row sits lower than the top row, partly sunk into the bottom
+// wall. At the same inset as the top they reached y=9.9 — into the panel
+// pocket, 0.1mm from the glass edge — so the bottom clearance was really
+// 0.1mm at three points while the parameter claimed 1.5. They now stop short
+// of the pocket.
 bx0 = wall + boss_d/2 + 1;
 bx1 = outer_w - wall - boss_d/2 - 1;
-by0 = wall + boss_d/2 + 1;
+by0 = min(wall + boss_d/2 + 1, (bezel_bottom - panel_clear_h) - boss_d/2 - 0.1);
 by1 = outer_h - wall - boss_d/2 - 1;
 screw_pos = [[bx0, by0], [outer_w/2, by0], [bx1, by0], [bx0, by1], [bx1, by1]];
+
+// --- checks -----------------------------------------------------------------
+// Each of these is a mistake this design has already made once, or nearly.
+ytip_ = bezel_bottom - panel_clear_h;
+assert(ytip_ - finger_arm > 0,
+       "finger arm pokes out through the bottom face");
+assert(by0 + boss_d/2 < ytip_,
+       "bottom bosses reach into the panel pocket");
+assert(by0 - insert_d/2 >= 1.2,
+       "too little wall outside the bottom inserts");
+assert(shoulder_len >= 0.5,
+       "board stack too deep: the board would hit the back cover");
+// The ribs reach almost to the cover (z 24.4 of 24.6), so a shoulder that
+// lands on one would stop the cover closing. Fine if the pins are below the
+// ribs' lower end, or between them.
+assert(pin_y + shoulder_d/2 < inner_top_y - cam_wall_len
+       || max([for (x = pin_xs) abs(x - cam_cx)]) + shoulder_d/2 <= cam_wall_gap/2,
+       "a pin shoulder lands on a camera rib — check lens_to_pins / lens_to_pins_x");
+assert(cam_cy + lens_to_board_top <= top_face_y,
+       "board's top edge would be inside the top wall — check lens_to_board_top");
+assert(usb_z - usb_t/2 >= bezel_t/2,
+       "USB slot would notch the front face");
+assert(usb_z + usb_t/2 <= outer_z - 1,
+       "USB slot would break out of the back");
+assert(abs(usb_x - cam_cx) + usb_w/2 <= cam_wall_gap/2,
+       "USB slot would cut into a camera rib");
 
 // ---------------------------------------------------------------------------
 
@@ -282,12 +388,17 @@ module camera_well() {
         cube([cam_well_w, cam_well_w, panel_rebate_depth + 0.1]);
 }
 
-// Countersunk from the front so the bezel cannot vignette a wide lens sitting
-// 2.5mm behind the outer face.
+// Countersunk from the FRONT so the bezel cannot vignette a wide lens sitting
+// 2.5mm behind the outer face. z=0 is the front face.
+//
+// It used to be cut from bezel_t downward, widening toward the INSIDE — next
+// to the lens, where it does nothing for the field of view. Same mistake as
+// the back cover's screw seats: a cone on the face nobody looks through.
+// 45 degrees, so it prints face-down without support.
 module camera_hole() {
     translate([cam_cx, cam_cy, -1]) cylinder(d = cam_hole_d, h = bezel_t + 2);
-    translate([cam_cx, cam_cy, bezel_t - 1.2])
-        cylinder(d1 = cam_hole_d, d2 = cam_hole_d + 4, h = 1.21);
+    translate([cam_cx, cam_cy, -0.01])
+        cylinder(d1 = cam_hole_d + cam_hole_csk, d2 = cam_hole_d, h = cam_hole_csk/2);
 }
 
 module button_hole() {
@@ -308,11 +419,26 @@ module bosses(bore = false) {
             else      cylinder(d = boss_d, h = outer_z - bezel_t);
 }
 
-module board_posts(bore = false) {
-    for (dx = [0, bp_pitch]) for (dy = [bp_bottom_y, bp_middle_y])
-        translate([board_org[0] + dx, board_org[1] + dy, bezel_t + panel_t])
-            if (bore) cylinder(d = bp_hole_d - 0.3, h = post_h + 1);   // self-tapping
-            else      cylinder(d = 5, h = post_h);
+// Stadium-shaped, through the whole top wall into the cavity.
+module usb_slot() {
+    translate([usb_x, outer_h + 1, usb_z]) rotate([90, 0, 0])
+        linear_extrude(outer_h + 1 - top_face_y + 1)
+            hull() for (s = [-1, 1]) translate([s * (usb_w - usb_t)/2, 0]) circle(d = usb_t);
+}
+
+// Built in COVER coordinates. The cover is flipped about the vertical axis to
+// fit, so a feature at shell x lands at cover x = outer_w - x. Everything so
+// far happened to be symmetric and never needed this; the pins need not be.
+module cover_pins() {
+    for (x = pin_xs)
+        translate([outer_w - x, pin_y, back_t - 0.01]) {
+            cylinder(d = shoulder_d, h = shoulder_len + 0.01);
+            translate([0, 0, shoulder_len]) {
+                cylinder(d = pin_d, h = pin_len - pin_tip + 0.01);
+                translate([0, 0, pin_len - pin_tip])
+                    cylinder(d1 = pin_d, d2 = pin_d - 0.8, h = pin_tip);
+            }
+        }
 }
 
 // ---------------------------------------------------------------------------
@@ -338,13 +464,12 @@ module shell() {
             bosses();
             camera_walls();
             if (finger_count > 0) panel_fingers();
-            if (use_board_posts) board_posts();
         }
         window();
         camera_hole();
         button_hole();
+        usb_slot();
         bosses(bore = true);
-        if (use_board_posts) board_posts(bore = true);
     }
 }
 
@@ -415,15 +540,67 @@ module back() {
                 translate([kx - keyhole_pad_d/2, keyhole_y, back_t])
                     cube([keyhole_pad_d, keyhole_rise, keyhole_pad_z]);
             }
+            if (board_pins) cover_pins();
         }
         for (kx = keyhole_xs) keyhole_cut(kx, keyhole_y);
+        // Countersunk on the OUTSIDE face, z=0 — the face that hangs against
+        // the wall. It used to be cut on the inside face (the one with the
+        // pads), which left plain holes outside and the screw heads proud.
+        // Screw positions are symmetric across the flip, so x needs no mirror.
         for (pos = screw_pos)
-            translate([pos[0], pos[1], -1]) {
-                cylinder(d = screw_d, h = back_t + 2);
-                translate([0,0,back_t]) cylinder(d1 = screw_d, d2 = screw_d + 2.4, h = 1.3);
+            translate([pos[0], pos[1], 0]) {
+                translate([0, 0, -1]) cylinder(d = screw_d, h = back_t + 2);
+                translate([0, 0, -0.01])
+                    cylinder(d1 = screw_head_d, d2 = screw_d, h = (screw_head_d - screw_d)/2);
             }
     }
 }
+
+// Inside of the coupon's walls, in SHELL x, left open past the top face.
+module coupon_opening()  translate([coupon_x0 + wall, coupon_y0 + wall])
+                             square([2*coupon_half_w - 2*wall, top_face_y - coupon_y0]);
+
+module coupon_shell() {
+    intersection() {
+        shell();
+        translate([coupon_x0, coupon_y0, -1])
+            cube([2*coupon_half_w, outer_h - coupon_y0 + 1, outer_z + 2]);
+    }
+    // Walls along the three cut edges. They run 1mm into the top wall rather
+    // than stopping at its face, so the join has real overlap, not a seam.
+    linear_extrude(outer_z)
+        difference() {
+            translate([coupon_x0, coupon_y0]) square([2*coupon_half_w, top_face_y - coupon_y0 + 1]);
+            coupon_opening();
+        }
+}
+
+module coupon_back() {
+    // The real cover, cut to the same slice. The cover is mirrored in x when
+    // fitted, so the slice is too.
+    intersection() {
+        back();
+        translate([outer_w - coupon_x1, coupon_y0, -1])
+            cube([2*coupon_half_w, outer_h - coupon_y0 + 1, 50]);
+    }
+    // Locating rim, standing in for the corner screws. Gapped where the
+    // camera ribs come up to within 0.2mm of the cover, or it would land on them.
+    rib_span = cam_wall_gap/2 + cam_wall_t + 1;
+    translate([0, 0, back_t - 0.01])
+        linear_extrude(coupon_rim_h + 0.01)
+            translate([outer_w, 0]) mirror([1, 0])       // shell x -> cover x
+                difference() {
+                    offset(delta = -coupon_rim_clear) coupon_opening_closed();
+                    offset(delta = -coupon_rim_clear - coupon_rim_t) coupon_opening_closed();
+                    translate([cam_cx - rib_span, inner_top_y - cam_wall_len - 1])
+                        square([2*rib_span, cam_wall_len + 10]);
+                }
+}
+
+// The opening, closed at the top by the top wall's real inside face.
+module coupon_opening_closed()
+    translate([coupon_x0 + wall, coupon_y0 + wall])
+        square([2*coupon_half_w - 2*wall, top_face_y - coupon_y0 - wall]);
 
 module test_frame() {
     difference() {
@@ -443,9 +620,15 @@ module test_frame() {
 
 // ---------------------------------------------------------------------------
 
-if (test_fit)              test_frame();
-else if (part == "shell")  shell();
-else if (part == "back")   back();
+if (test_fit)                     test_frame();
+else if (part == "shell")         shell();
+else if (part == "back")          back();
+else if (part == "coupon_shell")  coupon_shell();
+else if (part == "coupon_back")   coupon_back();
+else if (part == "coupon") {
+    coupon_shell();
+    translate([2*coupon_half_w + 10, 0, 0]) coupon_back();
+}
 else { shell(); translate([outer_w + 10, 0, 0]) back(); }
 
 echo(str("outer ", outer_w, " x ", outer_h, " x ", outer_z + back_t, " mm"));
@@ -461,8 +644,16 @@ echo(str("ribs span y ", inner_top_y - cam_wall_len, " to ", inner_top_y,
          "; pocket top at ", pocket_top_y, " -> clear"));
 echo(str("rib top at z ", bezel_t + panel_rebate_depth + cam_wall_h,
          "; interior ends at ", outer_z));
-echo(str("panel enters past ", finger_count, " fingers on the bottom edge; ",
-         "top and sides keep their ledge"));
+echo(str("panel tucks under ", finger_count, " rigid hooks on the bottom edge; ",
+         "bottom bosses end ", ytip_ - (by0 + boss_d/2), "mm short of the pocket"));
+echo(str("lens hole ", cam_hole_d, "mm for a ", cam_lens_d, "mm lens -> +-",
+         cam_hole_slop, "mm of placement error forgiven"));
+echo(str("pins at x ", pin_xs[0], " / ", pin_xs[1], ", y ", pin_y,
+         "; shoulder ", shoulder_len, "mm off the cover, presses the board ",
+         pin_preload, "mm"));
+echo(str("USB-C slot ", usb_w, " x ", usb_t, "mm at x ", usb_x, ", z ", usb_z,
+         " through ", outer_h - top_face_y, "mm of top wall; board edge ",
+         top_face_y - (cam_cy + lens_to_board_top), "mm short of the wall"));
 echo(str("inner depth ", inner_depth, " mm; screws: ", len(screw_pos)));
 echo(str("panel borders  side ", panel_border_side, "  bottom ",
          panel_border_bottom, "  top ", panel_border_top));
