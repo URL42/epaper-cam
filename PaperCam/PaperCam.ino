@@ -111,6 +111,9 @@ static bool     hold_fired    = false;
  * The blink accelerates over the last second. A steady blink tells you a timer
  * is running but not when it will fire; speeding up is what makes it possible
  * to be looking at the lens at the right moment rather than guessing.
+ *
+ * The rule across every state: lit, solid or blinking, means busy and the
+ * shutter is ignored; dark means listening. Boot is solid for its ~5s too.
  */
 static constexpr uint8_t  PIN_LED  = LED_BUILTIN;   /* GPIO21 */
 static constexpr uint8_t  LED_ON   = LOW;
@@ -280,6 +283,118 @@ static bool     raw_pressed     = false;
 static bool     stable_pressed  = false;
 static uint32_t last_raw_change = 0;
 static uint32_t shot_count      = 0;
+
+/*
+ * After anything that blocks — boot, a shot, an upload — take the button as it
+ * is now and treat a press already in progress as spent. Without this the
+ * debouncer compares against a reading from before the block: a press made
+ * while busy became a tap on release, or, held across the end, a hold and an
+ * upload nobody asked for. The LED was lit; a press made then is ignored.
+ *
+ * Also covers waking from sleep with the finger still down. press_started was
+ * 0 at boot, so that press read as held for the whole of setup() and fired an
+ * upload the moment loop() started.
+ */
+static void button_resync(void)
+{
+    raw_pressed     = (digitalRead(PIN_SHUTTER) == LOW);
+    stable_pressed  = raw_pressed;
+    last_raw_change = millis();
+    hold_fired      = raw_pressed;   // spent: neither its release nor a hold fires
+}
+
+/* ---------------------------------------------------------------------------
+ * Shutter diagnostics.
+ *
+ * The debouncer only reports what it accepts. It cannot tell "the pin never
+ * moved" from "it moved for 10ms" from "it moved while we were painting", and
+ * those point at different faults: wiring, a bad contact, or nothing at all.
+ * So an interrupt timestamps every raw change on D5 and loop() prints them.
+ *
+ * An interrupt rather than polling because loop() is blind for eight seconds
+ * during a shot — exactly the window worth seeing into. The ISR only records.
+ * The ring overwrites its oldest entry when full and loop() says how many went.
+ *
+ * The level is read in the ISR, a few microseconds after the edge. Bounce
+ * faster than that shows as two edges with the same level in a row — that is
+ * the contact chattering, not a fault in the log.
+ *
+ * On by default while the button is under suspicion; 'd' toggles it.
+ * ------------------------------------------------------------------------ */
+
+struct PinEdge {
+    uint32_t us;
+    uint8_t  level;
+    uint8_t  busy;
+};
+
+static constexpr uint32_t EDGE_RING = 64;
+static volatile PinEdge   edge_ring[EDGE_RING];
+static volatile uint32_t  edge_head    = 0;      // the ISR writes, loop() reads
+static uint32_t           edge_tail    = 0;      // loop() only
+static volatile bool      shutter_busy = true;   // setup() counts as busy
+static bool               button_diag  = true;
+
+static void IRAM_ATTR on_shutter_edge(void)
+{
+    const uint32_t h = edge_head;
+    volatile PinEdge &e = edge_ring[h % EDGE_RING];
+    e.us      = micros();
+    e.level   = (uint8_t)digitalRead(PIN_SHUTTER);
+    e.busy    = shutter_busy;
+    edge_head = h + 1;
+}
+
+/*
+ * Only presses carry the [busy] tag. A release while busy is always ignored
+ * and usually expected — a hold's own release lands mid-upload — so tagging it
+ * would mislabel an accepted press.
+ */
+static void print_edges(void)
+{
+    static uint32_t low_at   = 0;
+    static bool     have_low = false;   // the previous kept edge was a LOW
+    const uint32_t head = edge_head;
+
+    if (!button_diag) { edge_tail = head; have_low = false; return; }
+
+    if (head - edge_tail > EDGE_RING) {
+        Serial.printf("D5: %lu edges lost, ring full\n",
+                      (unsigned long)(head - edge_tail - EDGE_RING));
+        edge_tail = head - EDGE_RING;
+        have_low  = false;
+    }
+    for (; edge_tail != head; edge_tail++) {
+        const volatile PinEdge &e = edge_ring[edge_tail % EDGE_RING];
+        const uint32_t us = e.us;
+        if (e.level == LOW) {
+            low_at   = us;
+            have_low = true;
+            Serial.printf("D5 LOW   at %lu.%03lu ms%s\n",
+                          (unsigned long)(us / 1000), (unsigned long)(us % 1000),
+                          e.busy ? "  [busy, ignored]" : "");
+        } else if (have_low) {
+            const uint32_t held = us - low_at;
+            have_low = false;
+            Serial.printf("D5 HIGH  at %lu.%03lu ms, low for %lu.%03lu ms\n",
+                          (unsigned long)(us / 1000), (unsigned long)(us % 1000),
+                          (unsigned long)(held / 1000), (unsigned long)(held % 1000));
+        } else {
+            // No LOW to pair with: bounce faster than the ISR, or the press
+            // began before the log did.
+            Serial.printf("D5 HIGH  at %lu.%03lu ms, low for ?\n",
+                          (unsigned long)(us / 1000), (unsigned long)(us % 1000));
+        }
+    }
+}
+
+// End of setup(), success or not: LED off means the shutter is listening.
+static void boot_done(void)
+{
+    digitalWrite(PIN_LED, LED_OFF);
+    shutter_busy = false;
+    button_resync();
+}
 
 // ---------------------------------------------------------------------------
 
@@ -486,7 +601,10 @@ static int merge_burst(int got)
  */
 static void self_timer(void)
 {
-    if (self_timer_ms == 0) return;
+    if (self_timer_ms == 0) {
+        digitalWrite(PIN_LED, LED_ON);   /* no countdown, still busy */
+        return;
+    }
 
     Serial.printf("self-timer %lu ms...\n", (unsigned long)self_timer_ms);
 
@@ -657,6 +775,23 @@ static void take_photo(void)
 void setup(void)
 {
     Serial.begin(115200);
+
+    // The pad was held through sleep; release it or the pin stays frozen and
+    // the button reads as permanently pressed.
+    rtc_gpio_hold_dis(WAKE_GPIO);
+
+    // Solid through boot, starting before the 2s serial wait so no part of it
+    // is dark. The panel is left alone when a photo exists, so without this a
+    // booting board and a dead one look identical. The edge log starts here
+    // too, so a second press made because the first seemed to do nothing is
+    // caught rather than lost.
+    pinMode(PIN_LED, OUTPUT);
+    digitalWrite(PIN_LED, LED_ON);
+
+    pinMode(PIN_SHUTTER, INPUT_PULLUP);
+    delay(10);
+    attachInterrupt(digitalPinToInterrupt(PIN_SHUTTER), on_shutter_edge, CHANGE);
+
     delay(2000);
 
     Serial.println("\n=== PaperCam ===");
@@ -684,19 +819,6 @@ void setup(void)
             Serial.printf("woke: cause %d\n", (int)wake_cause);
             break;
     }
-
-    // The pad was held through sleep; release it or the pin stays frozen and
-    // the button reads as permanently pressed.
-    rtc_gpio_hold_dis(WAKE_GPIO);
-
-    pinMode(PIN_LED, OUTPUT);
-    digitalWrite(PIN_LED, LED_OFF);
-
-    pinMode(PIN_SHUTTER, INPUT_PULLUP);
-    delay(10);
-    raw_pressed     = (digitalRead(PIN_SHUTTER) == LOW);
-    stable_pressed  = raw_pressed;
-    last_raw_change = millis();
 
     Serial.print("epaper.begin()... ");
     epaper.begin();
@@ -743,6 +865,7 @@ void setup(void)
     Serial.print("esp_camera_init... ");
     if (!camera_start()) {
         show_message("CAMERA FAIL", "see serial");
+        boot_done();
         return;
     }
     Serial.println("OK");
@@ -829,6 +952,7 @@ void setup(void)
     if (!accum || burst_n < 1) {
         Serial.println("burst allocation FAILED");
         show_message("BURST ALLOC FAIL", "see serial");
+        boot_done();
         return;
     }
     Serial.printf("burst %d frames + accumulator, free PSRAM: %u\n",
@@ -866,6 +990,7 @@ void setup(void)
     Serial.println("  0   sharpening off        ?   show current values");
     Serial.println("  n/N burst frames (1 = no averaging)   t/T self-timer +/-1s");
     Serial.println("  j   show the stored JPEG    u   upload it now    z   sleep now");
+    Serial.printf("  d   raw shutter edge log on/off (now %s)\n", button_diag ? "on" : "off");
     Serial.println("Sensor keys (OV3660 supports all of these):");
     Serial.println("  [/] sensor sharpness   ;/' denoise   -/= exposure bias");
     Serial.println("  v   flip vertically    h   mirror horizontally (both = 180 rotate)");
@@ -873,6 +998,7 @@ void setup(void)
                   (unsigned long)(SLEEP_AFTER_MS / 60000UL));
 
     last_activity_ms = millis();
+    boot_done();
 }
 
 /* ---------------------------------------------------------------------------
@@ -974,8 +1100,10 @@ static bool upload_last(void)
  * Hold action: send the last photo.
  *
  * LED language, continuing what the self-timer established — slow blink while
- * connecting, one long solid on success, rapid flashes on failure. The point
- * is knowing the outcome from across the room without a serial monitor.
+ * connecting, solid while sending, then a short dark gap and one long solid on
+ * success, rapid flashes on failure. The gap is what separates "sent" from
+ * "still sending". The point is knowing the outcome from across the room
+ * without a serial monitor.
  */
 static void on_hold(void)
 {
@@ -987,11 +1115,14 @@ static void on_hold(void)
 
     bool ok = false;
     if (wifi_connect(15000)) {
+        digitalWrite(PIN_LED, LED_ON);   // solid while sending: still busy
         ok = upload_last();
     }
     wifi_off();
 
     if (ok) {
+        digitalWrite(PIN_LED, LED_OFF);
+        delay(200);
         digitalWrite(PIN_LED, LED_ON);
         delay(800);
         digitalWrite(PIN_LED, LED_OFF);
@@ -1001,6 +1132,18 @@ static void on_hold(void)
     Serial.printf("upload %s, wifi off, free heap %u\n",
                   ok ? "OK" : "FAILED", (unsigned)ESP.getFreeHeap());
 #endif
+}
+
+/*
+ * Everything the shutter or a key can trigger runs through here, so the edge
+ * log and the debouncer agree on what "busy" covers.
+ */
+static void run_busy(void (*action)(void))
+{
+    shutter_busy = true;
+    action();
+    shutter_busy = false;
+    button_resync();
 }
 
 static void go_to_sleep(const char *why)
@@ -1016,6 +1159,10 @@ static void go_to_sleep(const char *why)
     // PWDN is not wired on this board — but it is the most we can do in
     // software and it is measurably better than leaving the clock running.
     esp_camera_deinit();
+
+    // The edge log's interrupt belongs to the digital GPIO matrix; drop it
+    // before the pad moves to the RTC domain for the wake.
+    detachInterrupt(digitalPinToInterrupt(PIN_SHUTTER));
 
     // The internal pullup does not survive the pad moving to the RTC domain,
     // so enable the RTC one and hold the pad through sleep. Without this the
@@ -1068,7 +1215,7 @@ static void handle_key(int c)
         case 'r': tone_cfg.sharp_rad  = (tone_cfg.sharp_rad > 1) ? tone_cfg.sharp_rad - 1 : 1; break;
         case 'R': tone_cfg.sharp_rad += 1; break;
         case '0': tone_cfg.sharp_amt  = 0.0f; break;   // sharpening fully off
-        case 'x': take_photo();  return;
+        case 'x': run_busy(take_photo);  return;
         case '?': print_tone();  return;
 
         /* Burst size. 1 disables averaging entirely, which is the direct A/B
@@ -1084,7 +1231,11 @@ static void handle_key(int c)
                           cam && cam->set_hmirror ? cam->set_hmirror(cam, cam_hmirror) : -1);
             return;
 
-        case 'u': on_hold(); return;
+        case 'u': run_busy(on_hold); return;
+        case 'd':
+            button_diag = !button_diag;
+            Serial.printf("shutter edge log %s\n", button_diag ? "on" : "off");
+            return;
         case 'z': go_to_sleep("asked"); return;   // never returns
 
         case 'j': {
@@ -1170,6 +1321,8 @@ static void handle_key(int c)
 
 void loop(void)
 {
+    print_edges();
+
     if (Serial.available()) {
         handle_key(Serial.read());
         last_activity_ms = millis();
@@ -1200,7 +1353,7 @@ void loop(void)
             // Released before the hold threshold, so it was a tap. If hold
             // already fired we stay quiet: one physical press, one action.
             Serial.printf("TAP (%lu ms)\n", (unsigned long)(now - press_started));
-            take_photo();
+            run_busy(take_photo);
         }
     }
 
@@ -1208,6 +1361,6 @@ void loop(void)
     // acknowledge it while your finger is still down.
     if (stable_pressed && !hold_fired && (now - press_started) >= HOLD_MS) {
         hold_fired = true;
-        on_hold();
+        run_busy(on_hold);
     }
 }
